@@ -666,9 +666,30 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def export_excel(input_dir: Path, output_path: Path) -> bool:
-    builder = Path(__file__).with_name("ctrip_hotel_excel_builder.mjs")
-    if not builder.is_file():
-        print(f"找不到 Excel 生成器：{builder}", file=sys.stderr)
+    script_dir = Path(__file__).parent
+    py_builder = script_dir / "ctrip_hotel_excel_builder.py"
+    mjs_builder = script_dir / "ctrip_hotel_excel_builder.mjs"
+
+    # 优先使用 Python + openpyxl 生成器，不依赖 @oai/artifact-tool。
+    if py_builder.is_file():
+        result = subprocess.run(
+            [sys.executable, str(py_builder), "--input-dir", str(input_dir), "--output", str(output_path)],
+            cwd=str(script_dir),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.stdout.strip():
+            print(result.stdout.strip(), flush=True)
+        if result.returncode == 0:
+            return True
+        if result.stderr.strip():
+            print(result.stderr.strip(), file=sys.stderr)
+        print("openpyxl 生成器失败，尝试回退到 Node.js 生成器。", file=sys.stderr)
+
+    # 回退：Node.js + @oai/artifact-tool 生成器（旧路径，可选）。
+    if not mjs_builder.is_file():
+        print(f"找不到 Excel 生成器：{py_builder} 或 {mjs_builder}", file=sys.stderr)
         return False
 
     node_bin = os.environ.get("CTRIP_NODE") or shutil.which("node")
@@ -677,8 +698,8 @@ def export_excel(input_dir: Path, output_path: Path) -> bool:
         return False
 
     result = subprocess.run(
-        [node_bin, str(builder), "--input-dir", str(input_dir), "--output", str(output_path)],
-        cwd=str(builder.parent),
+        [node_bin, str(mjs_builder), "--input-dir", str(input_dir), "--output", str(output_path)],
+        cwd=str(script_dir),
         text=True,
         capture_output=True,
         check=False,

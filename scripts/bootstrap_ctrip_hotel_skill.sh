@@ -15,7 +15,7 @@ usage() {
 
 选项：
   --venv-dir PATH       Python 虚拟环境目录，默认是当前目录/.venv
-  --node-modules PATH   包含 @oai/artifact-tool 的 Node.js node_modules 目录
+  --node-modules PATH   包含 @oai/artifact-tool 的 Node.js node_modules 目录（可选，旧 Excel 运行时）
   --python PATH         Python 可执行文件，默认使用 python3
   --node PATH            Node.js 可执行文件，默认使用 node
   -h, --help            显示帮助
@@ -62,10 +62,6 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "找不到 Python：$PYTHON_BIN。请先安装 Python 3。" >&2
   exit 1
 fi
-if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
-  echo "找不到 Node.js：$NODE_BIN。请先安装 Node.js。" >&2
-  exit 1
-fi
 
 echo "创建或复用 Python 虚拟环境：$VENV_DIR"
 "$PYTHON_BIN" -m venv "$VENV_DIR"
@@ -80,6 +76,10 @@ echo "安装 CloakBrowser 依赖"
 
 LINK_PATH="$SCRIPT_DIR/node_modules"
 if [[ -n "$NODE_MODULES_DIR" ]]; then
+  if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
+    echo "找不到 Node.js：$NODE_BIN。请先安装 Node.js 或省略 --node-modules。" >&2
+    exit 1
+  fi
   if [[ ! -d "$NODE_MODULES_DIR/@oai/artifact-tool" ]]; then
     echo "--node-modules 目录中缺少 @oai/artifact-tool：$NODE_MODULES_DIR" >&2
     exit 1
@@ -89,19 +89,16 @@ if [[ -n "$NODE_MODULES_DIR" ]]; then
     exit 1
   fi
   ln -sfn "$NODE_MODULES_DIR" "$LINK_PATH"
+
+  echo "检查旧 Excel 运行时（@oai/artifact-tool，可选）"
+  (
+    cd "$SCRIPT_DIR"
+    "$NODE_BIN" --input-type=module -e 'import "@oai/artifact-tool"; console.log("artifact-tool-ok")'
+  )
 fi
 
-if [[ ! -d "$LINK_PATH/@oai/artifact-tool" ]]; then
-  echo "找不到 Excel 运行时 @oai/artifact-tool。" >&2
-  echo "请通过 --node-modules 指定包含该目录的 node_modules 路径。" >&2
-  exit 1
-fi
-
-echo "检查 Excel 运行时"
-(
-  cd "$SCRIPT_DIR"
-  "$NODE_BIN" --input-type=module -e 'import "@oai/artifact-tool"; console.log("artifact-tool-ok")'
-)
+echo "检查 Excel 运行时（openpyxl，默认）"
+"$VENV_PYTHON" -c 'import openpyxl; print("openpyxl-ok", openpyxl.__version__)'
 
 echo "部署完成。"
 echo "运行检查：$VENV_PYTHON $SCRIPT_DIR/ctrip_hotel_prices.py --help"

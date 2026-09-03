@@ -21,16 +21,14 @@ description: "Use when collecting logged-in Ctrip hotel room prices for configur
 
 ## 新机部署
 
-部署脚本针对 macOS/Linux，必须在首次运行前执行。它会创建或更新 Python 虚拟环境、安装 CloakBrowser 依赖，并检查 Excel 所需的 `@oai/artifact-tool`。
+部署脚本针对 macOS/Linux，必须在首次运行前执行。它会创建或更新 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 默认由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成，无需 Node.js。
 
 ```bash
 cd /path/to/ctrip-hotel-price-collector
-./scripts/bootstrap_ctrip_hotel_skill.sh \
-  --venv-dir /path/to/.venv \
-  --node-modules /path/to/node_modules
+./scripts/bootstrap_ctrip_hotel_skill.sh --venv-dir /path/to/.venv
 ```
 
-`--node-modules` 指向包含 `@oai/artifact-tool` 的 Node.js 依赖目录。Codex 环境中使用 `load_workspace_dependencies` 返回的 Node.js packages 路径；独立机器需要接入组织批准的 artifact-tool 运行时。脚本会在 `scripts/node_modules` 建立本地链接，不复制或修改依赖目录。
+`--node-modules` 为可选参数，仅在需要回退到旧的 `@oai/artifact-tool` 生成器时使用，指向包含该包的 Node.js node_modules 目录。
 
 部署完成后先检查：
 
