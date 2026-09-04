@@ -1,6 +1,8 @@
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +78,24 @@ class LoginSessionTests(unittest.TestCase):
             context.urls,
             ["https://www.ctrip.com/", "https://hotels.ctrip.com/"],
         )
+
+    def test_reuses_existing_profile_from_current_project_directory(self):
+        module = load_collector_module()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            project_dir = Path(temporary_directory) / "project"
+            config_dir = Path(temporary_directory) / "installed-skill"
+            project_profile = project_dir / ".cloakbrowser-profile"
+            project_profile.mkdir(parents=True)
+            config_dir.mkdir()
+
+            with patch("pathlib.Path.cwd", return_value=project_dir):
+                resolved = module.resolve_profile_dir(
+                    {"profile_dir": ".cloakbrowser-profile"},
+                    config_dir,
+                )
+
+        self.assertEqual(resolved, project_profile)
 
 
 if __name__ == "__main__":

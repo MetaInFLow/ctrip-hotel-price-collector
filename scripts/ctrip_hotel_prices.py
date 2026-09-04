@@ -176,11 +176,21 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def resolve_profile_dir(config: dict[str, Any], config_dir: Path) -> Path:
-    profile_dir = Path(str(config.get("profile_dir", ".cloakbrowser-profile")).strip())
+    configured_profile_dir = str(
+        config.get("profile_dir", ".cloakbrowser-profile")
+    ).strip() or ".cloakbrowser-profile"
+    profile_dir = Path(configured_profile_dir)
     profile_dir = profile_dir.expanduser()
     if profile_dir.is_absolute():
         return profile_dir
-    return config_dir / profile_dir
+    configured_path = config_dir / profile_dir
+    if configured_path.exists() or configured_profile_dir != ".cloakbrowser-profile":
+        return configured_path
+
+    project_path = Path.cwd() / profile_dir
+    if project_path.exists():
+        return project_path
+    return configured_path
 
 
 def resolve_detail_url_cache_path(config: dict[str, Any], config_dir: Path) -> Path:

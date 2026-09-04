@@ -65,7 +65,7 @@ cd /path/to/ctrip-hotel-price-collector
 - 原始响应和房型明细：配置的 `output_dir`，默认是 `output/ctrip_hotel_prices`。
 - Excel：`output_dir/ctrip_hotel_prices.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。
 - 详情页缓存：配置的 `detail_url_cache_file`，默认是 `.ctrip-hotel-detail-cache.json`。
-- 登录会话与 Cookie：配置的 `profile_dir`，默认是 `.cloakbrowser-profile`。CloakBrowser 会从该持久化 Profile 自动恢复 Cookie；该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
+- 登录会话与 Cookie：配置的 `profile_dir`，默认是 `.cloakbrowser-profile`。CloakBrowser 会从该持久化 Profile 自动恢复 Cookie；当默认安装目录没有 Profile 时，脚本会复用当前项目目录下已有的 `.cloakbrowser-profile`。该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
 
 ## 约束
 
