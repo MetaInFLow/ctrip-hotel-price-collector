@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,11 @@ DEFAULT_DETAIL_CACHE_NAME = ".ctrip-hotel-detail-cache.json"
 ROOM_LIST_API_PATH = "/restapi/soa2/33278/getHotelRoomListInland"
 LOGIN_XPATH = "xpath=//span[normalize-space()='登录']"
 ORDERS_XPATH = "xpath=//*[normalize-space()='我的订单']"
-SEARCH_INPUT_XPATH = "xpath=//input[@id='_allSearchKeyword']"
+HOTEL_SEARCH_INPUT_XPATH = "xpath=//input[@id='_allSearchKeyword']"
+HOTEL_SEARCH_BUTTON_XPATH = "xpath=//*[@id='search_button_global']"
+HOTEL_CANDIDATE_XPATH = "xpath=//*[@class='search_list_hotel']"
+HOTEL_CANDIDATE_NAME_XPATH = "xpath=.//p"
+HOTEL_CANDIDATE_TYPE_XPATH = "xpath=.//*[@type]"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "ctrip_hotel_config.json"
 
 
@@ -245,7 +250,10 @@ def _first_visible(locator: Any) -> Any | None:
     try:
         count = locator.count()
     except Exception:
-        return None
+        try:
+            return locator if locator.is_visible() else None
+        except Exception:
+            return None
     for index in range(count):
         candidate = locator.nth(index)
         try:
@@ -363,17 +371,82 @@ def normalized_text(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
 
 
-def hotel_cache_key(hotel_name: str) -> str:
-    return normalized_text(str(hotel_name).strip())
+def normalized_city_id(city_id: int | str | None) -> str:
+    if city_id is None:
+        return ""
+    return normalized_text(str(city_id).strip())
+
+
+def hotel_cache_key(
+    hotel_name: str,
+    city_id: int | str | None = None,
+) -> str:
+    name_key = normalized_text(str(hotel_name).strip())
+    city_key = normalized_city_id(city_id)
+    return f"{name_key}::city={city_key}" if city_key else name_key
 
 
 def is_valid_detail_url(url: str) -> bool:
     parsed = urlsplit(str(url).strip())
+    path = parsed.path.lower()
     return (
         parsed.scheme in {"http", "https"}
         and bool(parsed.netloc)
-        and "/hotels/" in parsed.path.lower()
+        and re.search(
+            r"/hotels?/(?!list(?:/|$)|search(?:/|$))[^/]+$",
+            path,
+        )
+        is not None
     )
+
+
+def _cache_record_timestamp(record: dict[str, Any]) -> str:
+    return str(record.get("updated_at") or "").strip()
+
+
+def _prefer_cache_record(
+    current: dict[str, Any] | None,
+    incoming: dict[str, Any],
+) -> dict[str, Any]:
+    if current is None:
+        return incoming
+
+    current_timestamp = _cache_record_timestamp(current)
+    incoming_timestamp = _cache_record_timestamp(incoming)
+    if incoming_timestamp and current_timestamp:
+        return incoming if incoming_timestamp >= current_timestamp else current
+    if incoming_timestamp:
+        return incoming
+    return current
+
+
+def _normalize_detail_url_cache(
+    cache: dict[str, dict[str, Any]] | Any,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(cache, dict):
+        return {}
+
+    normalized_cache: dict[str, dict[str, Any]] = {}
+    for stored_key, record in cache.items():
+        if not isinstance(record, dict):
+            continue
+        hotel_name = str(record.get("hotel_name") or stored_key).strip()
+        detail_url = str(record.get("detail_url", "")).strip()
+        city_id = record.get("city_id")
+        key = hotel_cache_key(hotel_name, city_id)
+        if not normalized_text(hotel_name) or not is_valid_detail_url(detail_url):
+            continue
+        normalized_record = {
+            "hotel_name": hotel_name,
+            "detail_url": detail_url,
+            "city_id": city_id,
+            "updated_at": record.get("updated_at", ""),
+        }
+        normalized_cache[key] = _prefer_cache_record(
+            normalized_cache.get(key),
+            normalized_record,
+        )
+    return normalized_cache
 
 
 def load_detail_url_cache(path: Path) -> dict[str, dict[str, Any]]:
@@ -386,24 +459,7 @@ def load_detail_url_cache(path: Path) -> dict[str, dict[str, Any]]:
         return {}
 
     items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, dict):
-        return {}
-
-    cache: dict[str, dict[str, Any]] = {}
-    for stored_key, record in items.items():
-        if not isinstance(record, dict):
-            continue
-        hotel_name = str(record.get("hotel_name") or stored_key).strip()
-        detail_url = str(record.get("detail_url", "")).strip()
-        key = hotel_cache_key(hotel_name)
-        if key and is_valid_detail_url(detail_url):
-            cache[key] = {
-                "hotel_name": hotel_name,
-                "detail_url": detail_url,
-                "city_id": record.get("city_id"),
-                "updated_at": record.get("updated_at", ""),
-            }
-    return cache
+    return _normalize_detail_url_cache(items)
 
 
 def get_cached_detail_url(
@@ -412,15 +468,17 @@ def get_cached_detail_url(
     *,
     city_id: int | str | None = None,
 ) -> str | None:
-    record = cache.get(hotel_cache_key(hotel_name))
+    exact_key = hotel_cache_key(hotel_name, city_id)
+    record = cache.get(exact_key)
+    if not isinstance(record, dict) and city_id is not None:
+        # Read caches written before city_id became part of the key.
+        record = cache.get(hotel_cache_key(hotel_name))
     if not isinstance(record, dict):
         return None
 
-    stored_city_id = record.get("city_id")
-    if (
-        city_id is not None
-        and stored_city_id not in (None, "", city_id, str(city_id))
-    ):
+    stored_city_id = normalized_city_id(record.get("city_id"))
+    requested_city_id = normalized_city_id(city_id)
+    if requested_city_id and stored_city_id and stored_city_id != requested_city_id:
         return None
 
     detail_url = str(record.get("detail_url", "")).strip()
@@ -435,12 +493,12 @@ def cache_detail_url(
     city_id: int | str | None = None,
 ) -> None:
     normalized_name = str(hotel_name).strip()
-    if not hotel_cache_key(normalized_name):
+    if not normalized_text(normalized_name):
         raise ValueError("酒店名称不能为空")
     normalized_url = str(detail_url).strip()
     if not is_valid_detail_url(normalized_url):
         raise ValueError(f"无效的酒店详情页 URL：{detail_url}")
-    cache[hotel_cache_key(normalized_name)] = {
+    cache[hotel_cache_key(normalized_name, city_id)] = {
         "hotel_name": normalized_name,
         "detail_url": normalized_url,
         "city_id": city_id,
@@ -448,15 +506,63 @@ def cache_detail_url(
     }
 
 
+@contextmanager
+def detail_url_cache_lock(path: Path):
+    """Serialize cache read/merge/write operations across collector processes."""
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a+b")
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.seek(0)
+            lock_file.write(b"0")
+            lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        locked = True
+        yield
+    finally:
+        if locked:
+            if os.name == "nt":
+                import msvcrt
+
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+
+
 def save_detail_url_cache(path: Path, cache: dict[str, dict[str, Any]]) -> None:
-    write_json(
-        path,
-        {
-            "version": 1,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "items": cache,
-        },
-    )
+    with detail_url_cache_lock(path):
+        disk_cache = load_detail_url_cache(path)
+        incoming_cache = _normalize_detail_url_cache(cache)
+        merged_cache = dict(disk_cache)
+        for key, record in incoming_cache.items():
+            merged_cache[key] = _prefer_cache_record(
+                merged_cache.get(key),
+                record,
+            )
+
+        cache.clear()
+        cache.update(merged_cache)
+        write_json(
+            path,
+            {
+                "version": 2,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "items": merged_cache,
+            },
+        )
 
 
 def find_hotel_detail_href(page: Any, hotel_name: str) -> str | None:
@@ -483,10 +589,132 @@ def find_hotel_detail_href(page: Any, hotel_name: str) -> str | None:
                 if value
             )
             if target in normalized_text(text):
-                return urljoin(page.url, href)
+                absolute_href = urljoin(page.url, href)
+                if is_valid_detail_url(absolute_href):
+                    return absolute_href
         except Exception:
             continue
     return None
+
+
+def _get_attribute(locator: Any, name: str) -> str:
+    try:
+        value = locator.get_attribute(name)
+    except Exception:
+        return ""
+    return str(value or "").strip()
+
+
+def extract_hotel_candidates(page: Any) -> list[dict[str, Any]]:
+    """Read usable hotel candidates from Ctrip's global search result list."""
+    candidates_locator = page.locator(HOTEL_CANDIDATE_XPATH)
+    try:
+        count = candidates_locator.count()
+    except Exception:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for index in range(count):
+        candidate_locator = candidates_locator.nth(index)
+        try:
+            if not candidate_locator.is_visible():
+                continue
+
+            candidate_type = _get_attribute(candidate_locator, "type")
+            if not candidate_type:
+                try:
+                    candidate_type = candidate_locator.locator(
+                        HOTEL_CANDIDATE_TYPE_XPATH
+                    ).inner_text(timeout=1_000).strip()
+                except Exception:
+                    candidate_type = ""
+            if candidate_type.lower() not in {"hotel", "酒店"}:
+                continue
+
+            candidate_name = _get_attribute(candidate_locator, "word")
+            if not candidate_name:
+                try:
+                    candidate_name = candidate_locator.locator(
+                        HOTEL_CANDIDATE_NAME_XPATH
+                    ).inner_text(timeout=1_000).strip()
+                except Exception:
+                    candidate_name = ""
+            if not candidate_name:
+                continue
+
+            candidate_url = _get_attribute(candidate_locator, "url")
+            candidate_district = _get_attribute(candidate_locator, "district")
+            has_attribute_api = callable(getattr(candidate_locator, "get_attribute", None))
+            if has_attribute_api and (
+                not candidate_url or not is_valid_detail_url(candidate_url)
+            ):
+                continue
+            dedupe_key = candidate_url or candidate_name
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            candidates.append(
+                {
+                    "name": candidate_name,
+                    "type": candidate_type,
+                    "district": candidate_district,
+                    "url": candidate_url,
+                    "page": page,
+                    "locator": candidate_locator,
+                }
+            )
+        except Exception:
+            continue
+    return candidates
+
+
+def wait_for_hotel_candidates(
+    page: Any,
+    timeout_seconds: float,
+    *,
+    browser: Any | None = None,
+) -> list[dict[str, Any]]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        for candidate_page in browser_pages(browser, page) if browser else [page]:
+            candidates = extract_hotel_candidates(candidate_page)
+            if candidates:
+                return candidates
+        page.wait_for_timeout(250)
+    raise TimeoutError(f"等待酒店候选下拉超时（{timeout_seconds:g} 秒）")
+
+
+def choose_hotel_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    input_fn: Any = input,
+) -> dict[str, Any]:
+    if not candidates:
+        raise ValueError("没有可选择的酒店候选")
+    if len(candidates) == 1:
+        selected_index = 0
+    else:
+        print("找到多个酒店候选，请选择：", flush=True)
+        for index, candidate in enumerate(candidates, start=1):
+            district = str(candidate.get("district") or "").strip()
+            suffix = f"（{district}）" if district else ""
+            print(f"  {index}. {candidate['name']}{suffix}", flush=True)
+        while True:
+            try:
+                value = input_fn("请选择酒店序号：").strip()
+            except EOFError as exc:
+                raise RuntimeError(
+                    "当前终端无法接收酒店选择，请在交互式终端中重新运行。"
+                ) from exc
+            try:
+                selected_index = int(value) - 1
+            except ValueError:
+                selected_index = -1
+            if 0 <= selected_index < len(candidates):
+                break
+            print(f"请输入 1 到 {len(candidates)} 之间的序号。", flush=True)
+    return candidates[selected_index]
 
 
 def search_hotel(
@@ -495,20 +723,48 @@ def search_hotel(
     hotel_name: str,
     *,
     timeout_seconds: float,
+    input_fn: Any = input,
 ) -> tuple[Any, str]:
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
-    search_input = wait_for_visible(page, SEARCH_INPUT_XPATH, 60, "酒店搜索框")
+    search_input = wait_for_visible(
+        page, HOTEL_SEARCH_INPUT_XPATH, 60, "酒店模糊搜索框"
+    )
     search_input.fill(hotel_name)
-    search_input.press("Enter")
+    search_button = wait_for_visible(
+        page,
+        HOTEL_SEARCH_BUTTON_XPATH,
+        60,
+        "携程搜索按钮",
+    )
+    search_button.click(timeout=5_000)
+    page.wait_for_timeout(250)
+    candidates: list[dict[str, Any]] = []
+    for candidate_page in browser_pages(browser, page):
+        candidates = extract_hotel_candidates(candidate_page)
+        if candidates:
+            break
+    if not candidates:
+        # Ctrip may close the global result list after the button click. Re-fire
+        # the input event so the same fuzzy query renders the candidate list.
+        search_input.fill(hotel_name)
+        candidates = wait_for_hotel_candidates(
+            page,
+            timeout_seconds,
+            browser=browser,
+        )
+    selected_candidate = choose_hotel_candidate(candidates, input_fn=input_fn)
+    selected_hotel_name = str(selected_candidate["name"])
+    selected_page = selected_candidate.get("page", page)
+    selected_candidate["locator"].click(timeout=5_000)
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         pages = browser_pages(browser, page)
         for candidate in pages:
             try:
-                if "/hotels/" in candidate.url.lower():
+                if is_valid_detail_url(candidate.url):
                     return candidate, candidate.url
-                href = find_hotel_detail_href(candidate, hotel_name)
+                href = find_hotel_detail_href(candidate, selected_hotel_name)
                 if href:
                     return candidate, href
             except Exception:
@@ -516,18 +772,24 @@ def search_hotel(
 
         for candidate in pages:
             try:
-                text_match = _first_visible(candidate.get_by_text(hotel_name, exact=True))
+                text_match = _first_visible(
+                    candidate.get_by_text(selected_hotel_name, exact=True)
+                )
                 if text_match is not None:
                     text_match.click(timeout=5_000)
                     candidate.wait_for_timeout(1000)
                     for opened_page in browser_pages(browser, candidate):
-                        if "/hotels/" in opened_page.url.lower():
+                        if is_valid_detail_url(opened_page.url):
                             return opened_page, opened_page.url
             except Exception:
                 continue
+
+        selected_url = str(selected_candidate.get("url") or "").strip()
+        if selected_url and is_valid_detail_url(selected_url):
+            return selected_page, urljoin(selected_page.url, selected_url)
         page.wait_for_timeout(1000)
 
-    raise TimeoutError(f"搜索酒店超时，未找到详情页：{hotel_name}")
+    raise TimeoutError(f"搜索酒店超时，未找到详情页：{selected_hotel_name}")
 
 
 def resolve_hotel_detail(
@@ -717,10 +979,46 @@ def flatten_room_rows(
 
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_path.replace(path)
+    finally:
+        if temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def write_run_index(
+    path: Path,
+    items: list[dict[str, Any]],
+    *,
+    status: str,
+    error: str | None = None,
+) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    payload: dict[str, Any] = {
+        "version": 1,
+        "status": status,
+        "generated_at": timestamp,
+        "updated_at": timestamp,
+        "items": items,
+    }
+    if error:
+        payload["error"] = error
+    write_json(path, payload)
+
+
+def close_browser_safely(browser: Any) -> None:
+    try:
+        browser.close()
+    except Exception:
+        print("浏览器实例可能已由托管环境清理，跳过重复关闭。", file=sys.stderr)
 
 
 def export_excel(input_dir: Path, output_path: Path) -> bool:
@@ -778,7 +1076,14 @@ def collect_prices(
     stays = build_stays(config)
     browser = None
     summary: list[dict[str, Any]] = []
+    index_path = output_dir / "index.json"
     operation_started = False
+
+    def checkpoint(status: str, error: str | None = None) -> None:
+        try:
+            write_run_index(index_path, summary, status=status, error=error)
+        except Exception as exc:
+            print(f"采集进度无法保存：{exc}", file=sys.stderr)
 
     def wait_between_operations(label: str) -> None:
         nonlocal operation_started
@@ -810,6 +1115,7 @@ def collect_prices(
             float(config["login_timeout_seconds"]),
             session_probe_seconds=float(config["session_probe_seconds"]),
         )
+        checkpoint("running")
 
         if login_only:
             print(f"登录会话已保存到：{profile_dir}", flush=True)
@@ -837,6 +1143,7 @@ def collect_prices(
             if detail_source == "configured":
                 print(f"使用配置中的详情页：{detail_url}", flush=True)
             save_detail_url_cache(detail_url_cache_path, detail_url_cache)
+            checkpoint("running")
 
             for check_in, check_out in stays:
                 wait_between_operations(f"抓取日期 {check_in.isoformat()}")
@@ -896,6 +1203,7 @@ def collect_prices(
                         }
                     )
                     print(f"已保存：{file_path}", flush=True)
+                    checkpoint("running")
                 except Exception as exc:
                     error_payload = {
                         "hotel_name": hotel_name,
@@ -919,15 +1227,9 @@ def collect_prices(
                         }
                     )
                     print(f"本日期失败，已记录：{error_path}", file=sys.stderr)
+                    checkpoint("running")
 
-        index_path = output_dir / "index.json"
-        write_json(
-            index_path,
-            {
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "items": summary,
-            },
-        )
+        checkpoint("ready_for_export")
         ok_count = sum(item["status"] == "ok" for item in summary)
         print(f"\n处理完成：{ok_count}/{len(summary)} 个日期成功。", flush=True)
         print(f"汇总文件：{index_path}", flush=True)
@@ -935,8 +1237,10 @@ def collect_prices(
         excel_exported = export_excel(output_dir, excel_path)
         if excel_exported:
             print(f"Excel 文件：{excel_path}", flush=True)
+            checkpoint("completed")
         else:
             print("Excel 生成失败，原始 JSON 仍已保存。", file=sys.stderr)
+            checkpoint("failed", "Excel 生成失败")
         if config.get("keep_browser_open", True):
             try:
                 input("浏览器仍保持打开。按 Enter 关闭：")
@@ -944,11 +1248,16 @@ def collect_prices(
                 pass
         return 0 if ok_count == len(summary) and excel_exported else 2
     except Exception as exc:
+        checkpoint("failed", str(exc))
+        if summary:
+            partial_excel_path = output_dir / "ctrip_hotel_prices.xlsx"
+            if export_excel(output_dir, partial_excel_path):
+                print(f"已根据已落盘结果生成部分 Excel：{partial_excel_path}", flush=True)
         print(f"采集失败：{exc}", file=sys.stderr)
         return 1
     finally:
         if browser is not None:
-            browser.close()
+            close_browser_safely(browser)
 
 
 def parse_args() -> argparse.Namespace:

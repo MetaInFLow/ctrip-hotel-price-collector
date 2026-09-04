@@ -102,6 +102,37 @@ class LoginSessionTests(unittest.TestCase):
             ["https://www.ctrip.com/", "https://hotels.ctrip.com/"],
         )
 
+    def test_run_index_checkpoint_preserves_partial_progress(self):
+        module = load_collector_module()
+        item = {
+            "hotel_name": "测试酒店",
+            "check_in": "2026-09-04",
+            "check_out": "2026-09-05",
+            "status": "ok",
+        }
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            index_path = Path(temporary_directory) / "output" / "index.json"
+            module.write_run_index(index_path, [item], status="running")
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["items"], [item])
+
+    def test_detail_list_url_is_not_accepted_as_detail_page(self):
+        module = load_collector_module()
+
+        self.assertTrue(
+            module.is_valid_detail_url(
+                "http://hotels.ctrip.com/hotel/346405.html?cityid=2"
+            )
+        )
+        self.assertFalse(
+            module.is_valid_detail_url(
+                "https://hotels.ctrip.com/hotels/list?city=2"
+            )
+        )
+
     def test_accepts_explicit_absolute_profile_path(self):
         module = load_collector_module()
 

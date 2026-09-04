@@ -1,4 +1,4 @@
 interface:
   display_name: "FDE特供携程比价技能"
-  short_description: "登录态携程酒店列表与多日期房型价格比价及 Excel 导出"
-  default_prompt: "使用 $ctrip-hotel-price-collector 按配置采集携程酒店列表的多日期房型价格，并输出 Excel 比价结果。"
+  short_description: "登录态携程酒店模糊选店、多日期比价与 Excel 导出"
+  default_prompt: "使用 $ctrip-hotel-price-collector 按模糊酒店名选择携程候选，采集配置日期的房型价格，确认 index.json 与 Excel 已落盘后结束任务。"
