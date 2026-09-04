@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
 """把携程酒店采集结果导出为 Excel（openpyxl 实现）。
 
-这是 `ctrip_hotel_excel_builder.mjs` 的官方替代实现：原 `.mjs` 依赖
-`@oai/artifact-tool`（OpenAI Codex 内部包，公共 npm 上不可用），本脚本改用
-纯 Python 的 openpyxl 生成同样结构的四个工作表，无需任何 Node.js 依赖。
+本脚本是唯一的 Excel 生成入口，使用纯 Python 的 openpyxl 生成四个工作表，
+无需 Node.js 或其它运行时。
 
-用法（与原 .mjs 一致）：
+用法：
     python ctrip_hotel_excel_builder.py \
         --input-dir output/ctrip_hotel_prices \
-        --output output/ctrip_hotel_prices/ctrip_hotel_prices.xlsx \
-        [--preview]
-
-`--preview` 仅为兼容旧命令行保留；openpyxl 不负责渲染 PNG 预览图。
+        --output output/ctrip_hotel_prices/ctrip_hotel_prices.xlsx
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -220,17 +215,16 @@ def build(input_dir: Path, output_path: Path) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="把携程酒店采集结果导出为 Excel（openpyxl 实现，替代 ctrip_hotel_excel_builder.mjs）。",
+        description="把携程酒店采集结果导出为 Excel（纯 Python openpyxl 实现）。",
     )
     parser.add_argument("--input-dir", required=True, help="采集结果 JSON 目录（output/ctrip_hotel_prices）")
     parser.add_argument("--output", required=True, help="输出 .xlsx 路径")
-    parser.add_argument("--preview", action="store_true", help="兼容旧命令行，openpyxl 不渲染 PNG 预览")
     args = parser.parse_args(argv)
 
-    if args.preview:
-        print("提示：openpyxl 版生成器不渲染 PNG 预览图，已忽略 --preview。", file=sys.stderr)
-
-    build(Path(args.input_dir), Path(args.output))
+    build(
+        Path(args.input_dir).expanduser().resolve(),
+        Path(args.output).expanduser().resolve(),
+    )
     return 0
 
 

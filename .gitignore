@@ -3,4 +3,3 @@ __pycache__/
 .cloakbrowser-profile/
 .ctrip-hotel-detail-cache.json
 output/
-scripts/node_modules/

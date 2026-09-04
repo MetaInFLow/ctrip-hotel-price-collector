@@ -1,18 +1,28 @@
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "ctrip_hotel_prices.py"
+BOOTSTRAP_PATH = PROJECT_ROOT / "scripts" / "bootstrap_ctrip_hotel_skill.py"
 
 
 def load_collector_module():
     spec = importlib.util.spec_from_file_location("ctrip_hotel_prices", SCRIPT_PATH)
     if spec is None or spec.loader is None:
         raise AssertionError(f"无法加载采集脚本：{SCRIPT_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_bootstrap_module():
+    spec = importlib.util.spec_from_file_location("bootstrap_ctrip_hotel_skill", BOOTSTRAP_PATH)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"无法加载部署脚本：{BOOTSTRAP_PATH}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -79,23 +89,102 @@ class LoginSessionTests(unittest.TestCase):
             ["https://www.ctrip.com/", "https://hotels.ctrip.com/"],
         )
 
-    def test_reuses_existing_profile_from_current_project_directory(self):
+    def test_accepts_explicit_absolute_profile_path(self):
         module = load_collector_module()
 
         with tempfile.TemporaryDirectory() as temporary_directory:
-            project_dir = Path(temporary_directory) / "project"
-            config_dir = Path(temporary_directory) / "installed-skill"
-            project_profile = project_dir / ".cloakbrowser-profile"
-            project_profile.mkdir(parents=True)
-            config_dir.mkdir()
-
-            with patch("pathlib.Path.cwd", return_value=project_dir):
-                resolved = module.resolve_profile_dir(
-                    {"profile_dir": ".cloakbrowser-profile"},
-                    config_dir,
-                )
+            project_profile = Path(temporary_directory) / "profile"
+            resolved = module.resolve_profile_dir(
+                {"profile_dir": str(project_profile)},
+                Path(temporary_directory),
+            )
 
         self.assertEqual(resolved, project_profile)
+
+    def test_default_session_root_is_absolute(self):
+        module = load_collector_module()
+
+        self.assertTrue(module.default_session_root().is_absolute())
+
+    def test_default_storage_locations_follow_each_supported_platform(self):
+        module = load_collector_module()
+        home = Path("/tmp/test-home")
+
+        mac_root = module.session_root_for_platform(
+            os_name="posix",
+            platform="darwin",
+            home=home,
+            environ={},
+        )
+        windows_root = module.session_root_for_platform(
+            os_name="nt",
+            platform="win32",
+            home=home,
+            environ={"LOCALAPPDATA": "/tmp/test-local-app-data"},
+        )
+        linux_root = module.session_root_for_platform(
+            os_name="posix",
+            platform="linux",
+            home=home,
+            environ={},
+        )
+
+        self.assertEqual(
+            mac_root,
+            (home / "Library" / "Application Support" / module.SESSION_APP_NAME).resolve(),
+        )
+        self.assertEqual(
+            windows_root,
+            (Path("/tmp/test-local-app-data") / module.SESSION_APP_NAME).resolve(),
+        )
+        self.assertEqual(
+            linux_root,
+            (home / ".local" / "state" / module.SESSION_APP_NAME).resolve(),
+        )
+
+    def test_virtual_environment_python_path_is_platform_specific(self):
+        module = load_bootstrap_module()
+        venv_dir = Path("/tmp/ctrip-venv")
+
+        self.assertEqual(
+            module.venv_python(venv_dir, os_name="nt"),
+            venv_dir / "Scripts" / "python.exe",
+        )
+        self.assertEqual(
+            module.venv_python(venv_dir, os_name="posix"),
+            venv_dir / "bin" / "python",
+        )
+
+    def test_rejects_relative_profile_path(self):
+        module = load_collector_module()
+
+        with self.assertRaises(ValueError):
+            module.resolve_profile_dir(
+                {"profile_dir": ".cloakbrowser-profile"},
+                Path("/tmp/installed-skill"),
+            )
+
+    def test_config_defaults_to_absolute_storage_paths(self):
+        module = load_collector_module()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "hotels": [{"name": "测试酒店"}],
+                        "start_date": "2026-09-03",
+                        "days": 1,
+                        "nights": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = module.load_config(config_path)
+
+        self.assertTrue(Path(config["profile_dir"]).is_absolute())
+        self.assertTrue(Path(config["detail_url_cache_file"]).is_absolute())
+        self.assertTrue(Path(config["output_dir"]).is_absolute())
 
 
 if __name__ == "__main__":

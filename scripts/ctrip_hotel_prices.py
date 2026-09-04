@@ -8,10 +8,10 @@ import json
 import os
 import random
 import re
-import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -20,11 +20,47 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 HOME_URL = "https://www.ctrip.com/"
 CTRIP_SESSION_URLS = ["https://www.ctrip.com/", "https://hotels.ctrip.com/"]
+SESSION_APP_NAME = "ctrip-hotel-price-collector"
+DEFAULT_PROFILE_NAME = ".cloakbrowser-profile"
+DEFAULT_DETAIL_CACHE_NAME = ".ctrip-hotel-detail-cache.json"
 ROOM_LIST_API_PATH = "/restapi/soa2/33278/getHotelRoomListInland"
 LOGIN_XPATH = "xpath=//span[normalize-space()='登录']"
 ORDERS_XPATH = "xpath=//*[normalize-space()='我的订单']"
 SEARCH_INPUT_XPATH = "xpath=//input[@id='_allSearchKeyword']"
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "ctrip_hotel_config.json"
+
+
+def session_root_for_platform(
+    *,
+    os_name: str,
+    platform: str,
+    home: Path,
+    environ: Mapping[str, str],
+) -> Path:
+    home = home.expanduser().resolve()
+    if platform == "darwin":
+        base = home / "Library" / "Application Support"
+    elif os_name == "nt":
+        base = Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+    else:
+        base = Path(environ.get("XDG_STATE_HOME") or home / ".local" / "state")
+    return (base / SESSION_APP_NAME).expanduser().resolve()
+
+
+def default_session_root() -> Path:
+    return session_root_for_platform(
+        os_name=os.name,
+        platform=sys.platform,
+        home=Path.home(),
+        environ=os.environ,
+    )
+
+
+def require_absolute_path(value: Any, field_name: str) -> Path:
+    path = Path(str(value).strip()).expanduser()
+    if not path.is_absolute():
+        raise ValueError(f"{field_name} 必须使用绝对路径：{path}")
+    return path
 
 
 def parse_iso_date(value: Any, field_name: str) -> date:
@@ -155,9 +191,20 @@ def load_config(path: Path) -> dict[str, Any]:
     normalized.setdefault("adults", 2)
     normalized.setdefault("children", 0)
     normalized.setdefault("rooms", 1)
-    normalized.setdefault("output_dir", "output/ctrip_hotel_prices")
-    normalized.setdefault("profile_dir", ".cloakbrowser-profile")
-    normalized.setdefault("detail_url_cache_file", ".ctrip-hotel-detail-cache.json")
+    session_root = default_session_root()
+    normalized.setdefault(
+        "output_dir",
+        str(session_root / "output" / "ctrip_hotel_prices"),
+    )
+    normalized.setdefault("profile_dir", str(session_root / DEFAULT_PROFILE_NAME))
+    normalized.setdefault(
+        "detail_url_cache_file",
+        str(session_root / DEFAULT_DETAIL_CACHE_NAME),
+    )
+    for field_name in ("output_dir", "profile_dir", "detail_url_cache_file"):
+        normalized[field_name] = str(
+            require_absolute_path(normalized[field_name], field_name)
+        )
     normalized.setdefault("session_probe_seconds", 15)
     normalized.setdefault("random_sleep_min_seconds", 2)
     normalized.setdefault("random_sleep_max_seconds", 5)
@@ -176,31 +223,22 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def resolve_profile_dir(config: dict[str, Any], config_dir: Path) -> Path:
-    configured_profile_dir = str(
-        config.get("profile_dir", ".cloakbrowser-profile")
-    ).strip() or ".cloakbrowser-profile"
-    profile_dir = Path(configured_profile_dir)
-    profile_dir = profile_dir.expanduser()
-    if profile_dir.is_absolute():
-        return profile_dir
-    configured_path = config_dir / profile_dir
-    if configured_path.exists() or configured_profile_dir != ".cloakbrowser-profile":
-        return configured_path
-
-    project_path = Path.cwd() / profile_dir
-    if project_path.exists():
-        return project_path
-    return configured_path
+    del config_dir
+    return require_absolute_path(
+        config.get("profile_dir", default_session_root() / DEFAULT_PROFILE_NAME),
+        "profile_dir",
+    )
 
 
 def resolve_detail_url_cache_path(config: dict[str, Any], config_dir: Path) -> Path:
-    cache_file = str(
-        config.get("detail_url_cache_file", ".ctrip-hotel-detail-cache.json")
-    ).strip() or ".ctrip-hotel-detail-cache.json"
-    cache_path = Path(cache_file).expanduser()
-    if cache_path.is_absolute():
-        return cache_path
-    return config_dir / cache_path
+    del config_dir
+    return require_absolute_path(
+        config.get(
+            "detail_url_cache_file",
+            default_session_root() / DEFAULT_DETAIL_CACHE_NAME,
+        ),
+        "detail_url_cache_file",
+    )
 
 
 def _first_visible(locator: Any) -> Any | None:
@@ -686,39 +724,21 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def export_excel(input_dir: Path, output_path: Path) -> bool:
-    script_dir = Path(__file__).parent
+    script_dir = Path(__file__).resolve().parent
     py_builder = script_dir / "ctrip_hotel_excel_builder.py"
-    mjs_builder = script_dir / "ctrip_hotel_excel_builder.mjs"
-
-    # 优先使用 Python + openpyxl 生成器，不依赖 @oai/artifact-tool。
-    if py_builder.is_file():
-        result = subprocess.run(
-            [sys.executable, str(py_builder), "--input-dir", str(input_dir), "--output", str(output_path)],
-            cwd=str(script_dir),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if result.stdout.strip():
-            print(result.stdout.strip(), flush=True)
-        if result.returncode == 0:
-            return True
-        if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
-        print("openpyxl 生成器失败，尝试回退到 Node.js 生成器。", file=sys.stderr)
-
-    # 回退：Node.js + @oai/artifact-tool 生成器（旧路径，可选）。
-    if not mjs_builder.is_file():
-        print(f"找不到 Excel 生成器：{py_builder} 或 {mjs_builder}", file=sys.stderr)
-        return False
-
-    node_bin = os.environ.get("CTRIP_NODE") or shutil.which("node")
-    if not node_bin:
-        print("找不到 Node.js，无法生成 Excel。可设置 CTRIP_NODE 指向 Node.js。", file=sys.stderr)
+    if not py_builder.is_file():
+        print(f"找不到 Python Excel 生成器：{py_builder}", file=sys.stderr)
         return False
 
     result = subprocess.run(
-        [node_bin, str(mjs_builder), "--input-dir", str(input_dir), "--output", str(output_path)],
+        [
+            sys.executable,
+            str(py_builder),
+            "--input-dir",
+            str(input_dir),
+            "--output",
+            str(output_path),
+        ],
         cwd=str(script_dir),
         text=True,
         capture_output=True,
@@ -729,6 +749,7 @@ def export_excel(input_dir: Path, output_path: Path) -> bool:
     if result.returncode != 0:
         if result.stderr.strip():
             print(result.stderr.strip(), file=sys.stderr)
+        print("Python Excel 生成器执行失败，请确认已安装 requirements-cloak.txt。", file=sys.stderr)
         return False
     return True
 
@@ -749,9 +770,7 @@ def collect_prices(
         )
         return 1
 
-    output_dir = Path(config["output_dir"])
-    if not output_dir.is_absolute():
-        output_dir = config_dir / output_dir
+    output_dir = require_absolute_path(config["output_dir"], "output_dir")
     profile_dir = resolve_profile_dir(config, config_dir)
     detail_url_cache_path = resolve_detail_url_cache_path(config, config_dir)
     detail_url_cache = load_detail_url_cache(detail_url_cache_path)

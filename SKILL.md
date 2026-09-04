@@ -21,34 +21,46 @@ description: "Use when collecting logged-in Ctrip hotel room prices for configur
 
 ## 新机部署
 
-部署脚本针对 macOS/Linux，必须在首次运行前执行。它会创建或更新 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 默认由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成，无需 Node.js。
+首次运行前执行一次跨平台部署脚本。它会创建或更新 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 只由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成。
 
+macOS/Linux：
 ```bash
-cd /path/to/ctrip-hotel-price-collector
-./scripts/bootstrap_ctrip_hotel_skill.sh --venv-dir /path/to/.venv
+python3 /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.py \
+  --venv-dir /绝对路径/ctrip-hotel-price-collector/.venv
 ```
 
-`--node-modules` 为可选参数，仅在需要回退到旧的 `@oai/artifact-tool` 生成器时使用，指向包含该包的 Node.js node_modules 目录。
+Windows PowerShell：
+```powershell
+py C:\绝对路径\ctrip-hotel-price-collector\scripts\bootstrap_ctrip_hotel_skill.py `
+  --venv-dir C:\绝对路径\ctrip-hotel-price-collector\.venv
+```
+
+macOS/Linux 也可以执行同目录下的 `bootstrap_ctrip_hotel_skill.sh`，它只是上述 Python 部署脚本的便捷包装。
 
 部署完成后先检查：
 
 ```bash
-/path/to/.venv/bin/python scripts/ctrip_hotel_prices.py --help
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py --help
 ```
+
+Windows 检查命令使用 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Scripts\python.exe`。
 
 ## 运行
 
 首次只保存登录会话：
 
 ```bash
-/path/to/.venv/bin/python scripts/ctrip_hotel_prices.py --login-only
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py --login-only
 ```
 
 执行采集：
 
 ```bash
-/path/to/.venv/bin/python scripts/ctrip_hotel_prices.py \
-  --config ctrip_hotel_config.json
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py \
+  --config /绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json
 ```
 
 配置支持两种日期方式：
@@ -58,14 +70,25 @@ cd /path/to/ctrip-hotel-price-collector
 
 酒店可以是名称字符串，也可以是带 `name`、`detail_url`、`city_id` 的对象。公共参数包括 `city_id`、`adults`、`children`、`rooms`、`detail_url_cache_file`、`random_sleep_min_seconds` 和 `random_sleep_max_seconds`。
 
-详情页缓存默认写入 `.ctrip-hotel-detail-cache.json`，位置与配置文件相同。缓存记录酒店名称、城市和详情页 URL；修改酒店名称或城市后会按新键重新搜索。删除该文件即可强制重新搜索全部未显式配置详情页的酒店。
+详情页缓存使用固定绝对路径。缓存记录酒店名称、城市和详情页 URL；修改酒店名称或城市后会按新键重新搜索。删除该绝对路径文件即可强制重新搜索全部未显式配置详情页的酒店。
 
 ## 输出与会话
 
-- 原始响应和房型明细：配置的 `output_dir`，默认是 `output/ctrip_hotel_prices`。
-- Excel：`output_dir/ctrip_hotel_prices.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。
-- 详情页缓存：配置的 `detail_url_cache_file`，默认是 `.ctrip-hotel-detail-cache.json`。
-- 登录会话与 Cookie：配置的 `profile_dir`，默认是 `.cloakbrowser-profile`。CloakBrowser 会从该持久化 Profile 自动恢复 Cookie；当默认安装目录没有 Profile 时，脚本会复用当前项目目录下已有的 `.cloakbrowser-profile`。该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
+默认存储根目录始终由脚本解析为绝对路径：
+
+- macOS Cookie/Profile：`/Users/<系统用户名>/Library/Application Support/ctrip-hotel-price-collector/.cloakbrowser-profile`
+- macOS 详情页缓存：`/Users/<系统用户名>/Library/Application Support/ctrip-hotel-price-collector/.ctrip-hotel-detail-cache.json`
+- macOS 采集输出：`/Users/<系统用户名>/Library/Application Support/ctrip-hotel-price-collector/output/ctrip_hotel_prices`
+- Windows Cookie/Profile：`C:\Users\<系统用户名>\AppData\Local\ctrip-hotel-price-collector\.cloakbrowser-profile`
+- Windows 详情页缓存：`C:\Users\<系统用户名>\AppData\Local\ctrip-hotel-price-collector\.ctrip-hotel-detail-cache.json`
+- Windows 采集输出：`C:\Users\<系统用户名>\AppData\Local\ctrip-hotel-price-collector\output\ctrip_hotel_prices`
+- Linux Cookie/Profile：`/home/<系统用户名>/.local/state/ctrip-hotel-price-collector/.cloakbrowser-profile`
+- Linux 详情页缓存：`/home/<系统用户名>/.local/state/ctrip-hotel-price-collector/.ctrip-hotel-detail-cache.json`
+- Linux 采集输出：`/home/<系统用户名>/.local/state/ctrip-hotel-price-collector/output/ctrip_hotel_prices`
+
+Excel 文件位于对应系统的采集输出目录下的 `ctrip_hotel_prices.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。CloakBrowser 会从绝对 Profile 路径自动恢复 Cookie；该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
+
+如果在配置中自定义 `profile_dir`、`detail_url_cache_file` 或 `output_dir`，必须填写绝对路径；脚本会拒绝相对路径。
 
 ## 约束
 
