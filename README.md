@@ -9,6 +9,6 @@
 3. 首次执行 `scripts/ctrip_hotel_prices.py --login-only`，在可见浏览器中手动登录携程。
 4. 执行 `scripts/ctrip_hotel_prices.py --config ctrip_hotel_config.json`。
 
-结果写入配置中的 `output_dir`，详情页 URL 会缓存到 `.ctrip-hotel-detail-cache.json`。登录 Profile、Cookie、缓存和采集结果均只保存在本机，不应提交到仓库。
+结果写入配置中的 `output_dir`，详情页 URL 会缓存到 `.ctrip-hotel-detail-cache.json`。登录 Profile 中的 Cookie 会自动复用；脚本只记录 Cookie 数量，不输出 Cookie 值。登录 Profile、缓存和采集结果均只保存在本机，不应提交到仓库。
 
 完整流程与约束见 [SKILL.md](SKILL.md)。

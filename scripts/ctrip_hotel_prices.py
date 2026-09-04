@@ -19,6 +19,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 
 HOME_URL = "https://www.ctrip.com/"
+CTRIP_SESSION_URLS = ["https://www.ctrip.com/", "https://hotels.ctrip.com/"]
 ROOM_LIST_API_PATH = "/restapi/soa2/33278/getHotelRoomListInland"
 LOGIN_XPATH = "xpath=//span[normalize-space()='登录']"
 ORDERS_XPATH = "xpath=//*[normalize-space()='我的订单']"
@@ -233,12 +234,21 @@ def browser_pages(browser: Any, fallback_page: Any) -> list[Any]:
     return pages
 
 
+def count_ctrip_cookies(browser: Any) -> int:
+    cookie_reader = getattr(browser, "cookies", None)
+    if not callable(cookie_reader):
+        return 0
+    try:
+        return len(cookie_reader(CTRIP_SESSION_URLS))
+    except Exception:
+        return 0
+
+
 def find_logged_in_page(browser: Any, fallback_page: Any) -> Any | None:
     for page in browser_pages(browser, fallback_page):
         try:
             has_orders = _first_visible(page.locator(ORDERS_XPATH)) is not None
-            has_login = _first_visible(page.locator(LOGIN_XPATH)) is not None
-            if has_orders and not has_login:
+            if has_orders:
                 return page
         except Exception:
             continue
@@ -758,6 +768,11 @@ def collect_prices(
         else:
             print(f"未发现本地会话目录，将在首次登录后保存：{profile_dir}", flush=True)
         browser = launch_persistent_context(str(profile_dir), headless=False)
+        cookie_count = count_ctrip_cookies(browser)
+        if cookie_count:
+            print(f"已加载本地携程 Cookie（{cookie_count} 个），正在验证登录状态。", flush=True)
+        else:
+            print("本地未加载到携程 Cookie，等待手动登录。", flush=True)
         page = browser.pages[0] if browser.pages else browser.new_page()
         page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
         page = wait_for_login(

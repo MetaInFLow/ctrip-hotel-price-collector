@@ -11,9 +11,9 @@ description: "Use when collecting logged-in Ctrip hotel room prices for configur
 
 1. 先读取 `ctrip_hotel_config.json` 或用户指定的 JSON 配置。
 2. 新机器先完成“新机部署”步骤，确认 Python、CloakBrowser 和 Excel 运行时可用。
-3. 运行 `scripts/ctrip_hotel_prices.py`，使用可见的持久化 CloakBrowser profile。
+3. 运行 `scripts/ctrip_hotel_prices.py`，使用可见的持久化 CloakBrowser profile；启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
 4. 首次运行在携程页面点击“登录”，提示用户手动登录自己的账号；持续轮询 `//*[normalize-space()='我的订单']`，确认登录成功后才继续。
-5. 已有 profile 时先复用 Cookie 并检查“我的订单”。登录状态无效时重新提示手动登录。
+5. 已有 Profile 时先复用 Cookie 并检查“我的订单”。只要 `//*[normalize-space()='我的订单']` 可见就视为已登录，即使首页仍保留“登录”入口；登录状态无效时才提示手动登录。
 6. 有 `detail_url` 的酒店直接使用详情页并刷新详情页缓存；没有详情页时先读取缓存，命中后直接使用缓存 URL，未命中才通过 `#_allSearchKeyword` 搜索酒店并进入详情页。
 7. 每个日期拼接 `checkIn`、`checkOut`、`crn`、`adult`、`children` 参数，监听 `/restapi/soa2/33278/getHotelRoomListInland` 的非 `OPTIONS` 响应并保存完整 JSON。
 8. 酒店切换、日期切换和连续采集操作之间使用配置的随机等待区间，避免连续无间隔请求。
@@ -65,7 +65,7 @@ cd /path/to/ctrip-hotel-price-collector
 - 原始响应和房型明细：配置的 `output_dir`，默认是 `output/ctrip_hotel_prices`。
 - Excel：`output_dir/ctrip_hotel_prices.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。
 - 详情页缓存：配置的 `detail_url_cache_file`，默认是 `.ctrip-hotel-detail-cache.json`。
-- 登录会话：配置的 `profile_dir`，默认是 `.cloakbrowser-profile`。该目录包含敏感 Cookie，只保存在本机，不要提交、同步或分享。
+- 登录会话与 Cookie：配置的 `profile_dir`，默认是 `.cloakbrowser-profile`。CloakBrowser 会从该持久化 Profile 自动恢复 Cookie；该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
 
 ## 约束
 
