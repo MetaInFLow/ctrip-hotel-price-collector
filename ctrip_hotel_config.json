@@ -15,7 +15,7 @@
   "adults": 2,
   "children": 0,
   "rooms": 1,
-  "session_probe_seconds": 15,
+  "session_probe_seconds": 30,
   "random_sleep_min_seconds": 2,
   "random_sleep_max_seconds": 5,
   "login_timeout_seconds": 600,

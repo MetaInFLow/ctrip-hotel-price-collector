@@ -210,7 +210,7 @@ def load_config(path: Path) -> dict[str, Any]:
         normalized[field_name] = str(
             require_absolute_path(normalized[field_name], field_name)
         )
-    normalized.setdefault("session_probe_seconds", 15)
+    normalized.setdefault("session_probe_seconds", 30)
     normalized.setdefault("random_sleep_min_seconds", 2)
     normalized.setdefault("random_sleep_max_seconds", 5)
     normalized.setdefault("login_timeout_seconds", 600)
@@ -317,6 +317,7 @@ def wait_for_login(
     timeout_seconds: float,
     *,
     session_probe_seconds: float = 15,
+    has_persisted_cookies: bool = False,
 ) -> Any:
     probe_deadline = time.monotonic() + min(timeout_seconds, session_probe_seconds)
     logged_in_since: float | None = None
@@ -334,7 +335,7 @@ def wait_for_login(
 
         if _first_visible(page.locator(LOGIN_XPATH)) is not None:
             login_visible_since = login_visible_since or now
-            if now - login_visible_since >= 2:
+            if not has_persisted_cookies and now - login_visible_since >= 2:
                 break
         else:
             login_visible_since = None
@@ -353,11 +354,17 @@ def wait_for_login(
 
     deadline = time.monotonic() + timeout_seconds
     next_notice = time.monotonic() + 10
+    logged_in_since = None
     while time.monotonic() < deadline:
         logged_in_page = find_logged_in_page(browser, page)
+        now = time.monotonic()
         if logged_in_page is not None:
-            print("已检测到“我的订单”，登录成功。", flush=True)
-            return logged_in_page
+            logged_in_since = logged_in_since or now
+            if now - logged_in_since >= 1:
+                print("已检测到“我的订单”，登录成功。", flush=True)
+                return logged_in_page
+        else:
+            logged_in_since = None
         if time.monotonic() >= next_notice:
             remaining = max(0, int(deadline - time.monotonic()))
             print(f"仍在等待登录完成，剩余约 {remaining} 秒。", flush=True)
@@ -1114,6 +1121,7 @@ def collect_prices(
             page,
             float(config["login_timeout_seconds"]),
             session_probe_seconds=float(config["session_probe_seconds"]),
+            has_persisted_cookies=cookie_count > 0,
         )
         checkpoint("running")
 

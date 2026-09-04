@@ -1,12 +1,14 @@
 import importlib.util
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "ctrip_hotel_prices.py"
+OPEN_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "open_ctrip.py"
 BOOTSTRAP_PATH = PROJECT_ROOT / "scripts" / "bootstrap_ctrip_hotel_skill.py"
 SKILL_PATH = PROJECT_ROOT / "SKILL.md"
 METADATA_PATH = PROJECT_ROOT / "agents" / "openai.yaml"
@@ -25,6 +27,15 @@ def load_bootstrap_module():
     spec = importlib.util.spec_from_file_location("bootstrap_ctrip_hotel_skill", BOOTSTRAP_PATH)
     if spec is None or spec.loader is None:
         raise AssertionError(f"无法加载部署脚本：{BOOTSTRAP_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_open_module():
+    spec = importlib.util.spec_from_file_location("open_ctrip", OPEN_SCRIPT_PATH)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"无法加载打开脚本：{OPEN_SCRIPT_PATH}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -74,6 +85,110 @@ class LoginSessionTests(unittest.TestCase):
         self.assertIn("输出：", skill_text)
         self.assertIn('display_name: "FDE特供携程比价技能"', metadata_text)
         self.assertIn("short_description:", metadata_text)
+
+    def test_skill_requires_cloakbrowser_script_as_the_only_browser_entrypoint(self):
+        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("浏览器唯一入口", skill_text)
+        self.assertIn("所有携程页面操作", skill_text)
+        self.assertIn("系统默认浏览器", skill_text)
+        self.assertIn("launch_persistent_context", skill_text)
+        self.assertIn("脚本是唯一执行入口", skill_text)
+        self.assertIn("open_ctrip.py", skill_text)
+
+    def test_open_ctrip_uses_the_shared_persistent_profile(self):
+        module = load_open_module()
+        open_script_text = OPEN_SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("launch_persistent_context", open_script_text)
+        self.assertNotIn("from cloakbrowser import launch\n", open_script_text)
+        calls = []
+
+        class Page:
+            url = "about:blank"
+
+            def goto(self, url, wait_until=None, timeout=None):
+                del wait_until, timeout
+                self.url = url
+
+            def title(self):
+                return "携程"
+
+        class Context:
+            def __init__(self):
+                self.pages = [Page()]
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        context = Context()
+
+        def launcher(profile_dir, *, headless):
+            calls.append((profile_dir, headless))
+            return context
+
+        result = module.main([], launcher=launcher, input_fn=lambda _prompt: "")
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            calls,
+            [(str(module.default_profile_dir()), False)],
+        )
+        self.assertTrue(context.closed)
+
+    def test_loaded_profile_is_probed_before_login_prompt(self):
+        module = load_collector_module()
+
+        class Locator:
+            def __init__(self, visible):
+                self.visible = visible
+                self.clicked = False
+
+            def count(self):
+                return 1
+
+            def nth(self, _index):
+                return self
+
+            def is_visible(self):
+                return self.visible()
+
+            def click(self, timeout=None):
+                del timeout
+                self.clicked = True
+
+        class DelayedPage:
+            def __init__(self):
+                self.orders_checks = 0
+                self.login_locator = Locator(lambda: True)
+
+            def locator(self, selector):
+                if selector == module.ORDERS_XPATH:
+                    def orders_visible():
+                        self.orders_checks += 1
+                        return self.orders_checks >= 3
+
+                    return Locator(orders_visible)
+                if selector == module.LOGIN_XPATH:
+                    return self.login_locator
+                raise AssertionError(f"未预期的选择器：{selector}")
+
+            def wait_for_timeout(self, milliseconds):
+                time.sleep(milliseconds / 1000)
+
+        page = DelayedPage()
+        context = FakeContext([page])
+
+        result = module.wait_for_login(
+            context,
+            page,
+            timeout_seconds=3,
+            session_probe_seconds=3,
+            has_persisted_cookies=True,
+        )
+
+        self.assertIs(result, page)
+        self.assertFalse(page.login_locator.clicked)
 
     def test_visible_orders_means_logged_in_even_when_login_trigger_remains(self):
         module = load_collector_module()

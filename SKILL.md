@@ -10,6 +10,14 @@ description: >-
 
 面向 FDE 场景的携程酒店价格采集与比价技能。用户可以提供精确详情页，也可以提供不完整的酒店名称，由脚本展示携程候选后人工确认具体酒店。
 
+## 浏览器唯一入口
+
+- 所有携程页面操作，包括打开页面、登录、输入、点击、候选选择、页面跳转和接口监听，都必须由本 Skill 的脚本通过 CloakBrowser 执行。
+- 脚本是唯一执行入口。禁止使用系统默认浏览器、Chrome、Edge、内置浏览器、通用浏览器工具或其他浏览器实例直接操作携程页面。
+- 需要人工登录时，只在脚本启动的可见 CloakBrowser 窗口中完成；登录完成后关闭窗口，后续任务继续使用同一个绝对 `profile_dir`。
+- 所有运行命令使用技能包自己的 Python 环境；浏览器启动函数固定为 `cloakbrowser.launch_persistent_context`，禁止改用非持久化 `launch`。
+- 需要单独打开携程页面时，只运行 `scripts/open_ctrip.py`；该辅助脚本与采集脚本使用同一默认 Profile，关闭窗口后登录状态仍由该 Profile 持久化。
+
 ## 能力范围
 
 - 登录态校验：复用本地持久化会话，必要时由用户在可见浏览器中手动登录。
@@ -27,9 +35,9 @@ description: >-
 
 1. 先读取 `ctrip_hotel_config.json` 或用户指定的 JSON 配置。
 2. 新机器先完成“新机部署”步骤，确认 Python、CloakBrowser 和 Excel 运行时可用。
-3. 运行 `scripts/ctrip_hotel_prices.py`，使用可见的持久化 CloakBrowser profile；启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
-4. 首次运行在携程页面点击“登录”，提示用户手动登录自己的账号；持续轮询 `//*[normalize-space()='我的订单']`，确认登录成功后才继续。
-5. 已有 Profile 时先复用 Cookie 并检查“我的订单”。只要 `//*[normalize-space()='我的订单']` 可见就视为已登录，即使首页仍保留“登录”入口；登录状态无效时才提示手动登录。
+3. 运行 `scripts/ctrip_hotel_prices.py`，使用可见的持久化 CloakBrowser Profile；启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
+4. 已有 Cookie 时，脚本先在同一 Profile 内持续探测登录状态，等待 `//*[normalize-space()='我的订单']` 稳定出现；探测失败后才点击登录入口。
+5. 首次登录只在脚本启动的 CloakBrowser 窗口中由用户手动完成；脚本持续轮询 `//*[normalize-space()='我的订单']`，确认登录标识稳定后才继续。
 6. 解析酒店详情页，按以下优先级处理：
    - 有 `detail_url`：直接使用配置地址，并刷新详情页缓存。
    - 无配置地址但缓存命中：复用与酒店名称、城市匹配的缓存地址。
