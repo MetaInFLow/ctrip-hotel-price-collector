@@ -32,6 +32,19 @@ HOTEL_SEARCH_BUTTON_XPATH = "xpath=//*[@id='search_button_global']"
 HOTEL_CANDIDATE_XPATH = "xpath=//*[@class='search_list_hotel']"
 HOTEL_CANDIDATE_NAME_XPATH = "xpath=.//p"
 HOTEL_CANDIDATE_TYPE_XPATH = "xpath=.//*[@type]"
+DEFAULT_SHOW_ALL_ROOMS_XPATH = (
+    "xpath=//*[contains(normalize-space(text()), '展示所有房型') "
+    "or contains(normalize-space(text()), '展示全部房型') "
+    "or contains(normalize-space(text()), '全部房型')]"
+)
+PRICE_MODE_ALIASES = {
+    "response": "response",
+    "page_xpath": "page_xpath",
+    "xpath": "page_xpath",
+}
+PAGE_PRICE_PATTERN = re.compile(
+    r"(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.])"
+)
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "ctrip_hotel_config.json"
 
 
@@ -66,6 +79,61 @@ def require_absolute_path(value: Any, field_name: str) -> Path:
     if not path.is_absolute():
         raise ValueError(f"{field_name} 必须使用绝对路径：{path}")
     return path
+
+
+def normalize_price_mode(value: Any) -> str:
+    mode = str(value or "response").strip().lower()
+    normalized = PRICE_MODE_ALIASES.get(mode)
+    if normalized is None:
+        allowed = ", ".join(sorted({"response", "page_xpath"}))
+        raise ValueError(f"price_mode 必须是 {allowed} 之一：{value}")
+    return normalized
+
+
+def normalize_xpath_selector(
+    value: Any,
+    field_name: str,
+    *,
+    required: bool = False,
+) -> str:
+    selector = str(value or "").strip()
+    if not selector:
+        if required:
+            raise ValueError(f"{field_name} 不能为空；请提供页面 XPath")
+        return ""
+    return selector if selector.startswith("xpath=") else f"xpath={selector}"
+
+
+def validate_price_config(config: dict[str, Any]) -> None:
+    config["price_mode"] = normalize_price_mode(config.get("price_mode", "response"))
+    config["show_all_rooms_xpath"] = normalize_xpath_selector(
+        config.get("show_all_rooms_xpath", DEFAULT_SHOW_ALL_ROOMS_XPATH),
+        "show_all_rooms_xpath",
+        required=True,
+    )
+    config["page_price_xpath"] = normalize_xpath_selector(
+        config.get("page_price_xpath", ""),
+        "page_price_xpath",
+        required=config["price_mode"] == "page_xpath",
+    )
+    config["page_room_name_xpath"] = normalize_xpath_selector(
+        config.get("page_room_name_xpath", ""),
+        "page_room_name_xpath",
+    )
+    try:
+        sample_size = int(config.get("page_price_sample_size", 3))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("page_price_sample_size 必须是大于等于 0 的整数") from exc
+    if sample_size < 0:
+        raise ValueError("page_price_sample_size 必须是大于等于 0 的整数")
+    config["page_price_sample_size"] = sample_size
+    try:
+        timeout_seconds = float(config.get("page_price_timeout_seconds", 15))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("page_price_timeout_seconds 必须是正数") from exc
+    if timeout_seconds <= 0:
+        raise ValueError("page_price_timeout_seconds 必须是正数")
+    config["page_price_timeout_seconds"] = timeout_seconds
 
 
 def parse_iso_date(value: Any, field_name: str) -> date:
@@ -218,6 +286,7 @@ def load_config(path: Path) -> dict[str, Any]:
     normalized.setdefault("api_timeout_seconds", 45)
     normalized.setdefault("settle_ms", 1500)
     normalized.setdefault("keep_browser_open", True)
+    validate_price_config(normalized)
     sleep_random_interval(
         normalized["random_sleep_min_seconds"],
         normalized["random_sleep_max_seconds"],
@@ -848,16 +917,180 @@ def resolve_hotel_detail(
     return detail_page, detail_url, "search"
 
 
-def capture_room_list_responses(
+def _read_locator_text(locator: Any) -> str:
+    for method_name in ("inner_text", "text_content"):
+        reader = getattr(locator, method_name, None)
+        if not callable(reader):
+            continue
+        try:
+            value = reader(timeout=1_000)
+        except TypeError:
+            try:
+                value = reader()
+            except Exception:
+                continue
+        except Exception:
+            continue
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _visible_locator_texts(
+    locator: Any,
+    *,
+    limit: int | None = None,
+) -> list[str]:
+    try:
+        count = locator.count()
+    except Exception:
+        count = 1
+    if limit is not None:
+        count = min(count, max(0, limit))
+
+    values: list[str] = []
+    for index in range(count):
+        candidate = locator.nth(index) if count != 1 or index == 0 else locator
+        try:
+            if not candidate.is_visible():
+                continue
+        except Exception:
+            continue
+        text = _read_locator_text(candidate)
+        if text:
+            values.append(text)
+    return values
+
+
+def wait_for_locator_texts(
+    page: Any,
+    selector: str,
+    timeout_seconds: float,
+    label: str,
+    *,
+    limit: int | None = None,
+) -> list[str]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        values = _visible_locator_texts(page.locator(selector), limit=limit)
+        if values:
+            return values
+        page.wait_for_timeout(250)
+    raise TimeoutError(f"等待{label}超时（{timeout_seconds:g} 秒）")
+
+
+def parse_page_price(value: Any) -> int | float | None:
+    text = str(value or "").replace("，", ",")
+    match = PAGE_PRICE_PATTERN.search(text)
+    if match is None:
+        return None
+    numeric = match.group(0).replace(",", "")
+    try:
+        parsed = float(numeric)
+    except ValueError:
+        return None
+    return int(parsed) if parsed.is_integer() else parsed
+
+
+def extract_page_price_rows(
+    page: Any,
+    *,
+    show_all_rooms_xpath: str,
+    page_price_xpath: str,
+    page_room_name_xpath: str = "",
+    timeout_seconds: float,
+    settle_ms: int = 0,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    show_selector = normalize_xpath_selector(
+        show_all_rooms_xpath,
+        "show_all_rooms_xpath",
+        required=True,
+    )
+    price_selector = normalize_xpath_selector(
+        page_price_xpath,
+        "page_price_xpath",
+        required=True,
+    )
+    room_name_selector = normalize_xpath_selector(
+        page_room_name_xpath,
+        "page_room_name_xpath",
+    )
+
+    show_all_rooms = wait_for_visible(
+        page,
+        show_selector,
+        timeout_seconds,
+        "展示所有房型按钮",
+    )
+    show_all_rooms.click(timeout=max(1_000, int(timeout_seconds * 1_000)))
+    if settle_ms:
+        page.wait_for_timeout(max(0, settle_ms))
+
+    price_texts = wait_for_locator_texts(
+        page,
+        price_selector,
+        timeout_seconds,
+        "页面房价",
+        limit=limit,
+    )
+    room_names: list[str] = []
+    if room_name_selector:
+        room_names = _visible_locator_texts(page.locator(room_name_selector))
+
+    rows: list[dict[str, Any]] = []
+    for index, price_text in enumerate(price_texts, start=1):
+        rows.append(
+            {
+                "页面序号": index,
+                "房型": room_names[index - 1] if index <= len(room_names) else "",
+                "页面价格文本": price_text,
+                "页面价格": parse_page_price(price_text),
+                "页面价格XPath": price_selector,
+                "展示所有房型XPath": show_selector,
+            }
+        )
+    return rows
+
+
+def capture_room_data(
     page: Any,
     detail_url: str,
     *,
     api_timeout_seconds: float,
     settle_ms: int,
-) -> list[dict[str, Any]]:
-    responses: list[dict[str, Any]] = []
+    price_mode: str = "response",
+    show_all_rooms_xpath: str = DEFAULT_SHOW_ALL_ROOMS_XPATH,
+    page_price_xpath: str = "",
+    page_room_name_xpath: str = "",
+    page_price_sample_size: int = 0,
+    page_price_timeout_seconds: float = 15,
+) -> dict[str, Any]:
+    normalized_mode = normalize_price_mode(price_mode)
+    normalized_show_xpath = normalize_xpath_selector(
+        show_all_rooms_xpath,
+        "show_all_rooms_xpath",
+        required=True,
+    )
+    normalized_price_xpath = normalize_xpath_selector(
+        page_price_xpath,
+        "page_price_xpath",
+        required=normalized_mode == "page_xpath",
+    )
+    normalized_room_name_xpath = normalize_xpath_selector(
+        page_room_name_xpath,
+        "page_room_name_xpath",
+    )
+    if page_price_sample_size < 0:
+        raise ValueError("page_price_sample_size 必须是大于等于 0 的整数")
 
-    # The API can be requested more than once during a detail-page refresh.
+    responses: list[dict[str, Any]] = []
+    page_price_rows: list[dict[str, Any]] = []
+    page_price_error: str | None = None
+
+    # Keep the response listener active while the page prices are read. Expanding
+    # all room types can trigger a second room-list request.
     def handle_response(response: Any) -> None:
         if not is_room_list_api_url(response.url):
             return
@@ -880,20 +1113,68 @@ def capture_room_list_responses(
     page.on("response", handle_response)
     try:
         page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
-        deadline = time.monotonic() + api_timeout_seconds
-        while not responses and time.monotonic() < deadline:
-            page.wait_for_timeout(250)
-        if not responses:
+        if normalized_mode == "response":
+            response_deadline = time.monotonic() + api_timeout_seconds
+            while not responses and time.monotonic() < response_deadline:
+                page.wait_for_timeout(250)
+        if normalized_mode == "response" and not responses:
             raise TimeoutError(
                 f"等待房型接口超时（{api_timeout_seconds:g} 秒）：{detail_url}"
             )
         page.wait_for_timeout(max(0, settle_ms))
-        return responses
+
+        should_read_page = normalized_mode == "page_xpath" or (
+            page_price_sample_size > 0 and bool(normalized_price_xpath)
+        )
+        if should_read_page:
+            try:
+                page_price_rows = extract_page_price_rows(
+                    page,
+                    show_all_rooms_xpath=normalized_show_xpath,
+                    page_price_xpath=normalized_price_xpath,
+                    page_room_name_xpath=normalized_room_name_xpath,
+                    timeout_seconds=page_price_timeout_seconds,
+                    settle_ms=settle_ms,
+                    limit=None
+                    if normalized_mode == "page_xpath"
+                    else page_price_sample_size,
+                )
+            except Exception as exc:
+                if normalized_mode == "page_xpath":
+                    raise
+                page_price_error = str(exc)
+        if normalized_mode == "page_xpath":
+            if not page_price_rows:
+                raise TimeoutError("页面 XPath 未读取到房价")
+            if not any(row.get("页面价格") is not None for row in page_price_rows):
+                raise ValueError("页面价格 XPath 命中的文本中没有可解析的数字价格")
+        return {
+            "responses": responses,
+            "page_price_rows": page_price_rows,
+            "page_price_error": page_price_error,
+        }
     finally:
         try:
             page.remove_listener("response", handle_response)
         except Exception:
             pass
+
+
+def capture_room_list_responses(
+    page: Any,
+    detail_url: str,
+    *,
+    api_timeout_seconds: float,
+    settle_ms: int,
+) -> list[dict[str, Any]]:
+    return capture_room_data(
+        page,
+        detail_url,
+        api_timeout_seconds=api_timeout_seconds,
+        settle_ms=settle_ms,
+        price_mode="response",
+        page_price_sample_size=0,
+    )["responses"]
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -954,9 +1235,16 @@ def flatten_room_rows(
                 "销售方案": str(sale.get("name", "")).strip(),
                 "销售方案ID": sale.get("id"),
                 "价格": price_info.get("price"),
+                "接口价格": price_info.get("price"),
+                "价格来源": "response",
                 "原价": price_info.get("deletePricewithOutCurrency"),
                 "货币": price_info.get("currency", ""),
                 "显示价格": price_info.get("displayPrice", ""),
+                "页面价格文本": "",
+                "页面序号": None,
+                "页面价格XPath": "",
+                "页面匹配方式": "",
+                "展示所有房型XPath": "",
                 "总价展示": total.get("content", ""),
                 "床型": bed_info.get("title", ""),
                 "早餐及权益": _category_titles(sale.get("saleRoomCategoryList")),
@@ -982,6 +1270,211 @@ def flatten_room_rows(
             str(row["销售方案Key"]),
         ),
     )
+
+
+def _normalized_room_name(value: Any) -> str:
+    return normalized_text(str(value or "")).lower()
+
+
+def match_page_price_rows(
+    response_rows: list[dict[str, Any]],
+    page_price_rows: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], dict[str, Any] | None, str]]:
+    """Match page prices to API rows by room name, then by visible order."""
+    matched_indexes: set[int] = set()
+    matches: list[tuple[dict[str, Any], dict[str, Any] | None, str]] = []
+    for page_index, page_row in enumerate(page_price_rows):
+        room_name = _normalized_room_name(page_row.get("房型"))
+        response_index: int | None = None
+        match_method = "序号"
+        if room_name:
+            for index, response_row in enumerate(response_rows):
+                if index in matched_indexes:
+                    continue
+                response_name = _normalized_room_name(response_row.get("房型"))
+                if response_name == room_name:
+                    response_index = index
+                    match_method = "房型名"
+                    break
+            if response_index is None and len(room_name) >= 2:
+                for index, response_row in enumerate(response_rows):
+                    if index in matched_indexes:
+                        continue
+                    response_name = _normalized_room_name(response_row.get("房型"))
+                    if (
+                        response_name
+                        and (room_name in response_name or response_name in room_name)
+                    ):
+                        response_index = index
+                        match_method = "房型名近似"
+                        break
+        if response_index is None and page_index < len(response_rows):
+            candidate_index = page_index
+            if candidate_index not in matched_indexes:
+                response_index = candidate_index
+        if response_index is None:
+            for index in range(len(response_rows)):
+                if index not in matched_indexes:
+                    response_index = index
+                    break
+        response_row = None
+        if response_index is not None:
+            matched_indexes.add(response_index)
+            response_row = response_rows[response_index]
+        matches.append((page_row, response_row, match_method))
+    return matches
+
+
+def build_page_room_rows(
+    *,
+    hotel_name: str,
+    check_in: str,
+    check_out: str,
+    detail_url: str,
+    captured_at: str,
+    source_file: str,
+    response_rows: list[dict[str, Any]],
+    page_price_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Use page XPath prices while retaining API metadata when available."""
+    room_rows: list[dict[str, Any]] = []
+    for page_row, response_row, match_method in match_page_price_rows(
+        response_rows,
+        page_price_rows,
+    ):
+        row = dict(response_row or {})
+        row.setdefault("酒店名称", hotel_name)
+        row.setdefault("入住日期", check_in)
+        row.setdefault("离店日期", check_out)
+        row.setdefault("详情页URL", detail_url)
+        row.setdefault("JSON文件", source_file)
+        row.setdefault("采集时间", captured_at)
+        row.setdefault("房型", "")
+        row.setdefault("房型ID", "")
+        row.setdefault("销售方案", "")
+        row.setdefault("销售方案ID", None)
+        row.setdefault("原价", None)
+        row.setdefault("货币", "")
+        row.setdefault("总价展示", "")
+        row.setdefault("床型", "")
+        row.setdefault("早餐及权益", "")
+        row.setdefault("取消政策", "")
+        row.setdefault("预订状态", "")
+        row.setdefault("可预订", None)
+        row.setdefault("余房", None)
+        row.setdefault("销售方案Key", "")
+        row.setdefault("接口状态", None)
+        row.setdefault("接口URL", "")
+        row["酒店名称"] = hotel_name
+        row["入住日期"] = check_in
+        row["离店日期"] = check_out
+        row["详情页URL"] = detail_url
+        row["JSON文件"] = source_file
+        row["采集时间"] = captured_at
+        if str(page_row.get("房型") or "").strip():
+            row["房型"] = str(page_row["房型"]).strip()
+        row["接口价格"] = row.get("接口价格", row.get("价格"))
+        row["价格"] = page_row.get("页面价格")
+        row["价格来源"] = "page_xpath"
+        row["页面价格文本"] = page_row.get("页面价格文本", "")
+        row["页面序号"] = page_row.get("页面序号")
+        row["页面价格XPath"] = page_row.get("页面价格XPath", "")
+        row["页面匹配方式"] = match_method
+        row["展示所有房型XPath"] = page_row.get("展示所有房型XPath", "")
+        row["显示价格"] = page_row.get("页面价格文本", "")
+        room_rows.append(row)
+    return room_rows
+
+
+def annotate_response_room_rows(
+    response_rows: list[dict[str, Any]],
+    page_price_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach sampled page values without changing the response price source."""
+    annotated_rows = [dict(row) for row in response_rows]
+    response_positions = {
+        id(response_row): index
+        for index, response_row in enumerate(response_rows)
+    }
+    for page_row, response_row, match_method in match_page_price_rows(
+        response_rows,
+        page_price_rows,
+    ):
+        if response_row is None:
+            continue
+        index = response_positions.get(id(response_row))
+        if index is None:
+            continue
+        row = annotated_rows[index]
+        row["页面价格文本"] = page_row.get("页面价格文本", "")
+        row["页面序号"] = page_row.get("页面序号")
+        row["页面价格XPath"] = page_row.get("页面价格XPath", "")
+        row["页面匹配方式"] = match_method
+        row["展示所有房型XPath"] = page_row.get("展示所有房型XPath", "")
+    return annotated_rows
+
+
+def build_page_price_checks(
+    response_rows: list[dict[str, Any]],
+    page_price_rows: list[dict[str, Any]],
+    *,
+    sample_size: int,
+) -> list[dict[str, Any]]:
+    if sample_size <= 0:
+        return []
+    checks: list[dict[str, Any]] = []
+    for page_row, response_row, match_method in match_page_price_rows(
+        response_rows,
+        page_price_rows[:sample_size],
+    ):
+        interface_price = None
+        if response_row is not None:
+            interface_price = response_row.get(
+                "接口价格",
+                response_row.get("价格"),
+            )
+        page_price = page_row.get("页面价格")
+        if interface_price is None or page_price is None:
+            status = "unavailable"
+        else:
+            try:
+                status = (
+                    "match"
+                    if float(interface_price) == float(page_price)
+                    else "mismatch"
+                )
+            except (TypeError, ValueError):
+                status = "unavailable"
+        checks.append(
+            {
+                "页面序号": page_row.get("页面序号"),
+                "房型": page_row.get("房型", "")
+                or (response_row or {}).get("房型", ""),
+                "接口价格": interface_price,
+                "页面价格": page_price,
+                "页面价格文本": page_row.get("页面价格文本", ""),
+                "匹配方式": match_method,
+                "结果": status,
+            }
+        )
+    return checks
+
+
+def page_price_check_status(
+    *,
+    page_price_rows: list[dict[str, Any]],
+    checks: list[dict[str, Any]],
+    error: str | None = None,
+) -> str:
+    if error:
+        return "failed"
+    if not page_price_rows:
+        return "skipped"
+    if any(check.get("结果") == "mismatch" for check in checks):
+        return "mismatch"
+    if any(check.get("结果") == "match" for check in checks):
+        return "match"
+    return "unavailable"
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -1066,6 +1559,11 @@ def collect_prices(
     login_only: bool = False,
 ) -> int:
     try:
+        validate_price_config(config)
+    except ValueError as exc:
+        print(f"配置错误：{exc}", file=sys.stderr)
+        return 1
+    try:
         from cloakbrowser import launch_persistent_context
     except ModuleNotFoundError:
         print(
@@ -1079,6 +1577,7 @@ def collect_prices(
     profile_dir = resolve_profile_dir(config, config_dir)
     detail_url_cache_path = resolve_detail_url_cache_path(config, config_dir)
     detail_url_cache = load_detail_url_cache(detail_url_cache_path)
+    price_mode = config["price_mode"]
     profile_exists = profile_dir.exists()
     stays = build_stays(config)
     browser = None
@@ -1174,13 +1673,23 @@ def collect_prices(
                     flush=True,
                 )
                 try:
-                    responses = capture_room_list_responses(
+                    collection = capture_room_data(
                         detail_page,
                         target_url,
                         api_timeout_seconds=float(config["api_timeout_seconds"]),
                         settle_ms=int(config["settle_ms"]),
+                        price_mode=price_mode,
+                        show_all_rooms_xpath=config["show_all_rooms_xpath"],
+                        page_price_xpath=config.get("page_price_xpath", ""),
+                        page_room_name_xpath=config.get("page_room_name_xpath", ""),
+                        page_price_sample_size=int(config["page_price_sample_size"]),
+                        page_price_timeout_seconds=float(
+                            config["page_price_timeout_seconds"]
+                        ),
                     )
-                    room_rows = flatten_room_rows(
+                    responses = collection["responses"]
+                    page_price_rows = collection["page_price_rows"]
+                    response_room_rows = flatten_room_rows(
                         hotel_name=hotel_name,
                         check_in=check_in.isoformat(),
                         check_out=check_out.isoformat(),
@@ -1189,15 +1698,64 @@ def collect_prices(
                         source_file=str(file_path),
                         responses=responses,
                     )
+                    page_price_checks = build_page_price_checks(
+                        response_room_rows,
+                        page_price_rows,
+                        sample_size=int(config["page_price_sample_size"]),
+                    )
+                    page_price_error = collection["page_price_error"]
+                    check_status = page_price_check_status(
+                        page_price_rows=page_price_rows,
+                        checks=page_price_checks,
+                        error=page_price_error,
+                    )
+                    if page_price_error:
+                        print(
+                            f"页面价格抽查失败，继续使用接口价格：{page_price_error}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    elif any(
+                        check.get("结果") == "mismatch"
+                        for check in page_price_checks
+                    ):
+                        print(
+                            "页面价格与接口价格存在差异，已写入 JSON 核验记录；"
+                            "当前仍按配置使用接口价格。",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    if price_mode == "page_xpath":
+                        room_rows = build_page_room_rows(
+                            hotel_name=hotel_name,
+                            check_in=check_in.isoformat(),
+                            check_out=check_out.isoformat(),
+                            detail_url=target_url,
+                            captured_at=datetime.now(timezone.utc).isoformat(),
+                            source_file=str(file_path),
+                            response_rows=response_room_rows,
+                            page_price_rows=page_price_rows,
+                        )
+                    else:
+                        room_rows = annotate_response_room_rows(
+                            response_room_rows,
+                            page_price_rows,
+                        )
                     payload = {
                         "hotel_name": hotel_name,
                         "check_in": check_in.isoformat(),
                         "check_out": check_out.isoformat(),
                         "detail_url": target_url,
+                        "price_mode": price_mode,
                         "captured_at": datetime.now(timezone.utc).isoformat(),
                         "responses": responses,
+                        "page_price_rows": page_price_rows,
+                        "page_price_checks": page_price_checks,
+                        "page_price_check_status": check_status,
                         "room_rows": room_rows,
                     }
+                    if page_price_error:
+                        payload["page_price_check_error"] = page_price_error
                     write_json(file_path, payload)
                     summary.append(
                         {
@@ -1205,8 +1763,16 @@ def collect_prices(
                             "check_in": check_in.isoformat(),
                             "check_out": check_out.isoformat(),
                             "status": "ok",
+                            "price_mode": price_mode,
                             "response_count": len(responses),
                             "room_row_count": len(room_rows),
+                            "page_price_check_status": check_status,
+                            "page_price_check_count": len(page_price_checks),
+                            "page_price_mismatch_count": sum(
+                                check.get("结果") == "mismatch"
+                                for check in page_price_checks
+                            ),
+                            "detail_url": target_url,
                             "file": str(file_path),
                         }
                     )
@@ -1218,6 +1784,7 @@ def collect_prices(
                         "check_in": check_in.isoformat(),
                         "check_out": check_out.isoformat(),
                         "detail_url": target_url,
+                        "price_mode": price_mode,
                         "status": "error",
                         "error": str(exc),
                     }
@@ -1229,7 +1796,9 @@ def collect_prices(
                             "check_in": check_in.isoformat(),
                             "check_out": check_out.isoformat(),
                             "status": "error",
+                            "price_mode": price_mode,
                             "room_row_count": 0,
+                            "page_price_check_status": "failed",
                             "error": str(exc),
                             "file": str(error_path),
                         }
@@ -1269,7 +1838,7 @@ def collect_prices(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="采集携程酒店房型价格接口 JSON")
+    parser = argparse.ArgumentParser(description="采集携程酒店房型价格")
     parser.add_argument(
         "--config",
         type=Path,
@@ -1281,6 +1850,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="只打开并保存登录会话，不执行酒店采集",
     )
+    parser.add_argument(
+        "--price-mode",
+        choices=("response", "page_xpath"),
+        help="价格来源：response（默认）或 page_xpath（页面 XPath）",
+    )
+    parser.add_argument(
+        "--show-all-rooms-xpath",
+        help="页面模式使用的“展示所有房型”按钮 XPath",
+    )
+    parser.add_argument(
+        "--page-price-xpath",
+        help="页面模式使用的房价元素 XPath",
+    )
+    parser.add_argument(
+        "--page-room-name-xpath",
+        help="可选：与房价元素同序的房型名称 XPath，用于价格核验匹配",
+    )
+    parser.add_argument(
+        "--page-price-sample-size",
+        type=int,
+        help="接口模式页面抽查数量；设为 0 关闭抽查",
+    )
     return parser.parse_args()
 
 
@@ -1289,6 +1880,21 @@ def main() -> int:
     config_path = args.config.expanduser().resolve()
     try:
         config = load_config(config_path)
+    except ValueError as exc:
+        print(f"配置错误：{exc}", file=sys.stderr)
+        return 1
+    if args.price_mode is not None:
+        config["price_mode"] = args.price_mode
+    if args.show_all_rooms_xpath is not None:
+        config["show_all_rooms_xpath"] = args.show_all_rooms_xpath
+    if args.page_price_xpath is not None:
+        config["page_price_xpath"] = args.page_price_xpath
+    if args.page_room_name_xpath is not None:
+        config["page_room_name_xpath"] = args.page_room_name_xpath
+    if args.page_price_sample_size is not None:
+        config["page_price_sample_size"] = args.page_price_sample_size
+    try:
+        validate_price_config(config)
     except ValueError as exc:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 1

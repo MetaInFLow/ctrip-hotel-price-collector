@@ -22,14 +22,16 @@ description: >-
 
 - 登录态校验：复用本地持久化会话，必要时由用户在可见浏览器中手动登录。
 - 模糊选店：输入部分酒店名，点击携程搜索按钮，展示酒店候选并由用户选择；候选包含酒店名、区域和详情地址。
-- 多日期比价：按连续日期或显式入住区间采集房型、价格和接口原始 JSON。
+- 多日期比价：按连续日期或显式入住区间采集房型、价格和接口原始 JSON；价格默认来自接口，也支持页面 XPath 模式。
+- 价格核验：接口模式可在同一页面点击“展示所有房型”并抽查页面价格，将差异写入 JSON。
 - 结果交付：生成房型明细、采集汇总、接口概览和 Excel 文件。
 - 操作边界：只执行查询、采集和导出，不执行下单、支付、取消或账号管理。
 
 ## 输入与输出
 
-- 输入：`ctrip_hotel_config.json` 或用户指定的配置文件。酒店项支持 `name`、可选 `detail_url` 和 `city_id`；日期支持连续区间或显式区间。
-- 输出：每个酒店和日期的原始 JSON、房型价格明细、采集汇总、接口概览和 `ctrip_hotel_prices.xlsx`。
+- 输入：`ctrip_hotel_config.json` 或用户指定的配置文件。酒店项支持 `name`、可选 `detail_url` 和 `city_id`；日期支持连续区间或显式区间；`price_mode` 支持 `response`（默认）和 `page_xpath`。
+- 页面价格配置：`page_price_xpath` 是页面价格元素 XPath；`show_all_rooms_xpath` 是“展示所有房型”按钮 XPath，缺省使用按按钮文字匹配的通用 XPath；`page_room_name_xpath` 可选，用于按房型名匹配接口行；`page_price_sample_size` 默认为 3，设为 0 可关闭接口模式抽查。
+- 输出：每个酒店和日期的原始 JSON、房型价格明细、采集汇总、接口概览和 `ctrip_hotel_prices.xlsx`。房型价格表包含 `价格来源`、`接口价格`、`页面价格文本`、`页面价格XPath` 和页面匹配方式。
 
 ## 核心流程
 
@@ -44,9 +46,11 @@ description: >-
    - 两者都没有：执行模糊选店流程。先在 `#_allSearchKeyword` 输入名称，点击 `#search_button_global`，再从 `//*[@class='search_list_hotel']` 读取候选。
 7. 模糊选店只保留可见、`type="hotel"`、包含 `word` 且带有效详情 `url` 的候选；使用 `district` 展示区域，按详情 URL 或酒店名去重，剔除地标、历史项、列表页和不完整项。候选按序号打印，用户确认后点击对应 `div`；流程不使用回车，也不猜测未确认的酒店。
 8. 如果携程在点击搜索按钮后收起候选下拉，重新触发同一模糊词的输入事件后再读取候选；仍无有效候选时给出明确错误并停止本次酒店解析。
-9. 每个日期拼接 `checkIn`、`checkOut`、`crn`、`adult`、`children` 参数，监听 `/restapi/soa2/33278/getHotelRoomListInland` 的非 `OPTIONS` 响应并保存完整 JSON。每个日期结束后立即写入结果文件和进度索引。
-10. 酒店切换、日期切换和连续采集操作之间使用配置的随机等待区间，避免连续无间隔请求。
-11. 生成原始 JSON、房型价格明细和 Excel。失败日期写入 `.error.json`，其他日期继续执行。
+9. 每个日期拼接 `checkIn`、`checkOut`、`crn`、`adult`、`children` 参数，监听 `/restapi/soa2/33278/getHotelRoomListInland` 的非 `OPTIONS` 响应并保存完整 JSON。
+10. `price_mode=response` 时使用接口 `priceInfo.price` 作为最终价格；配置了 `page_price_xpath` 且抽查数量大于 0 时，在同一响应监听期间先点击 `show_all_rooms_xpath`，读取页面价格并记录接口与页面差异，抽查失败继续保留接口结果。
+11. `price_mode=page_xpath` 时必须提供 `page_price_xpath`；脚本先点击 `show_all_rooms_xpath`，读取页面价格作为最终价格，同时保留接口价格、页面原文和匹配方式。页面 XPath 命中但没有可解析数字价格时，本日期失败。
+12. 每个日期结束后立即写入结果文件和进度索引；酒店切换、日期切换和连续采集操作之间使用配置的随机等待区间。
+13. 生成原始 JSON、房型价格明细和 Excel。失败日期写入 `.error.json`，其他日期继续执行。
 
 ## 浏览器实例生命周期
 
@@ -99,12 +103,26 @@ Windows 检查命令使用 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Sc
   --config /绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json
 ```
 
+使用页面 XPath 作为价格来源：
+
+```bash
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py \
+  --config /绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json \
+  --price-mode page_xpath \
+  --show-all-rooms-xpath "//*[@class='你的展开按钮选择器']" \
+  --page-price-xpath "//*[@class='你的价格选择器']" \
+  --page-room-name-xpath "//*[@class='你的房型名称选择器']"
+```
+
+页面 XPath 参数也可以直接写入 JSON 配置。原始 XPath 和带 `xpath=` 前缀的选择器都支持；页面模式需要提供真实的价格 XPath，示例中的选择器只表示参数位置。
+
 配置支持两种日期方式：
 
 - `start_date + days + nights`：从起始日期连续生成入住区间。
 - `dates`：显式提供多个 `check_in` / `check_out` 区间；存在 `dates` 时优先使用它。
 
-酒店可以是名称字符串，也可以是带 `name`、`detail_url`、`city_id` 的对象。公共参数包括 `city_id`、`adults`、`children`、`rooms`、`detail_url_cache_file`、`random_sleep_min_seconds` 和 `random_sleep_max_seconds`。
+酒店可以是名称字符串，也可以是带 `name`、`detail_url`、`city_id` 的对象。公共参数包括 `city_id`、`adults`、`children`、`rooms`、`price_mode`、`show_all_rooms_xpath`、`page_price_xpath`、`page_room_name_xpath`、`page_price_sample_size`、`detail_url_cache_file`、`random_sleep_min_seconds` 和 `random_sleep_max_seconds`。
 
 详情页缓存使用固定绝对路径。缓存记录酒店名称、城市和详情页 URL；每次保存都会读取磁盘最新内容并增量合并当前新增或更新的记录，再以原子方式写回，历史记录会继续保留。酒店名称与 `city_id` 共同组成缓存键，同名酒店在不同城市可以分别命中；旧版按酒店名称保存的缓存仍可读取。删除该绝对路径文件即可强制重新搜索全部未显式配置详情页的酒店。
 
@@ -122,7 +140,7 @@ Windows 检查命令使用 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Sc
 - Linux 详情页缓存：`/home/<系统用户名>/.local/state/ctrip-hotel-price-collector/.ctrip-hotel-detail-cache.json`
 - Linux 采集输出：`/home/<系统用户名>/.local/state/ctrip-hotel-price-collector/output/ctrip_hotel_prices`
 
-Excel 文件位于对应系统的采集输出目录下的 `ctrip_hotel_prices.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。CloakBrowser 会从绝对 Profile 路径自动恢复 Cookie；该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
+Excel 文件位于对应系统的采集输出目录下的 `ctrip_hotel_prices.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。房型价格表会标明价格来源、接口价格、页面价格原文、页面 XPath 和匹配方式；页面抽查明细保存在每日 JSON 的 `page_price_checks` 中。CloakBrowser 会从绝对 Profile 路径自动恢复 Cookie；该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
 
 如果在配置中自定义 `profile_dir`、`detail_url_cache_file` 或 `output_dir`，必须填写绝对路径；脚本会拒绝相对路径。
 
