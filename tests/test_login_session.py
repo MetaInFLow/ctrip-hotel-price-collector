@@ -8,6 +8,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "ctrip_hotel_prices.py"
 BOOTSTRAP_PATH = PROJECT_ROOT / "scripts" / "bootstrap_ctrip_hotel_skill.py"
+SKILL_PATH = PROJECT_ROOT / "SKILL.md"
+METADATA_PATH = PROJECT_ROOT / "agents" / "openai.yaml"
 
 
 def load_collector_module():
@@ -62,6 +64,17 @@ class FakeContext:
 
 
 class LoginSessionTests(unittest.TestCase):
+    def test_skill_has_fde_chinese_name_and_structured_description(self):
+        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+        metadata_text = METADATA_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("FDE特供携程比价技能", skill_text)
+        self.assertIn("适用：", skill_text)
+        self.assertIn("输入：", skill_text)
+        self.assertIn("输出：", skill_text)
+        self.assertIn('display_name: "FDE特供携程比价技能"', metadata_text)
+        self.assertIn("short_description:", metadata_text)
+
     def test_visible_orders_means_logged_in_even_when_login_trigger_remains(self):
         module = load_collector_module()
         page = FakePage(module, login_visible=True, orders_visible=True)

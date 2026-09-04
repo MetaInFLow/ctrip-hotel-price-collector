@@ -1,11 +1,19 @@
 ---
 name: ctrip-hotel-price-collector
-description: "Use when collecting logged-in Ctrip hotel room prices for configured hotels and dates in a visible CloakBrowser session, intercepting the room-list JSON and exporting Excel."
+description: >-
+  FDE特供携程比价技能。适用：在用户自己的携程登录态下，对配置的酒店列表和日期区间进行房型价格比价。
+  输入：酒店名称或详情页、城市和入住日期配置。输出：房型价格、完整接口 JSON 与 Excel 比价结果。
+  机制：复用本地绝对路径的登录会话与详情页缓存，按日期采集房型接口数据。边界：仅查询和导出，不执行下单、支付、取消或账号管理。
 ---
 
-# 携程酒店价格采集
+# FDE特供携程比价技能
 
-用于在用户自己的携程登录状态下采集酒店房型价格。技能只执行查询和导出，不执行下单、支付、取消或账号管理。
+面向 FDE 场景的携程酒店价格采集与比价技能。
+
+- 适用：登录态下的酒店列表、连续日期和指定日期区间比价。
+- 输入：酒店名称、可选详情页 URL、城市、入住参数和日期配置。
+- 输出：房型价格明细、完整接口 JSON、采集汇总和 Excel。
+- 边界：只执行查询和导出，不执行下单、支付、取消或账号管理。
 
 ## 核心流程
 

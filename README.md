@@ -1,4 +1,4 @@
-# Ctrip Hotel Price Collector
+# FDE特供携程比价技能
 
 在用户自己的携程登录状态下，使用 CloakBrowser 采集指定酒店、指定日期的房型价格，并输出 Excel。
 

@@ -1,4 +1,4 @@
 interface:
-  display_name: "携程酒店价格采集"
-  short_description: "Collect logged-in Ctrip hotel prices and export Excel"
-  default_prompt: "使用 $ctrip-hotel-price-collector 采集已登录携程账号下指定酒店和日期的房型价格。"
+  display_name: "FDE特供携程比价技能"
+  short_description: "登录态携程酒店列表与多日期房型价格比价及 Excel 导出"
+  default_prompt: "使用 $ctrip-hotel-price-collector 按配置采集携程酒店列表的多日期房型价格，并输出 Excel 比价结果。"
