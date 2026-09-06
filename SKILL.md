@@ -15,7 +15,7 @@ description: >-
 - 所有携程页面操作，包括打开页面、登录、输入、点击、候选选择、页面跳转和接口监听，都必须由本 Skill 的脚本通过 CloakBrowser 执行。
 - 脚本是唯一执行入口。禁止使用系统默认浏览器、Chrome、Edge、内置浏览器、通用浏览器工具或其他浏览器实例直接操作携程页面。
 - 需要人工登录时，只在脚本启动的可见 CloakBrowser 窗口中完成；登录完成后关闭窗口，后续任务继续使用同一个绝对 `profile_dir`。
-- 所有运行命令使用技能包自己的 Python 环境；浏览器启动函数固定为 `cloakbrowser.launch_persistent_context`，禁止改用非持久化 `launch`。
+- 所有运行命令使用技能包自己的 Python 环境；脚本统一调用本 Skill 的持久化启动适配器，底层使用 `cloakbrowser.launch_persistent_context` 的 CloakBrowser 二进制与参数，禁止改用非持久化 `launch`。
 - 需要单独打开携程页面时，只运行 `scripts/open_ctrip.py`；该辅助脚本与采集脚本使用同一默认 Profile，关闭窗口后登录状态仍由该 Profile 持久化。
 
 ## 能力范围
@@ -26,6 +26,59 @@ description: >-
 - 价格核验：接口模式可在同一页面点击“展示所有房型”并抽查页面价格，将差异写入 JSON。
 - 结果交付：生成房型明细、采集汇总、接口概览和 Excel 文件。
 - 操作边界：只执行查询、采集和导出，不执行下单、支付、取消或账号管理。
+
+## CLI 原子能力
+
+CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验证的业务动作，底层实现按脚本模块拆分：
+
+| 命令 | 实现模块 | 原子动作 | 结果 |
+| --- | --- | --- | --- |
+| `login` | `ctrip_cli_auth.py` | 启动持久化 Profile，复用 Cookie；必要时在可见窗口手动登录，并等待“我的订单”稳定出现 | 输出登录状态和 Cookie 数量，不输出 Cookie 值 |
+| `login-status` | `ctrip_cli_auth.py` | 打开首页并检查当前 Profile 的登录状态 | JSON；已登录退出码为 `0`，未登录退出码为 `2` |
+| `search` | `ctrip_cli_search.py` | 输入模糊酒店名，读取有效候选；交互选择后打开详情页 | 候选列表或选中的酒店名、区域、详情 URL |
+| `price` | `ctrip_cli_price.py` | 从指定起始日期生成连续入住区间，按日期采集价格 | `response` 模式获取接口 JSON；`page_xpath` 模式读取页面 XPath 价格 |
+| `collect` | `ctrip_hotel_prices.py` | 按完整 JSON 配置执行多酒店、多日期采集并导出 Excel | 保留原批量采集能力，支持缓存、随机等待、断点索引和 Excel |
+
+调用示例：
+
+```bash
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py login
+
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py login-status
+
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py search \
+  --keyword 峨眉山景区智选假日酒店
+
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py price \
+  --detail-url 'https://hotels.ctrip.com/hotels/119084256.html?cityid=95' \
+  --start-date 2026-09-06 --days 3 --price-mode response
+```
+
+页面 XPath 价格示例：
+
+```bash
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py price \
+  --detail-url 'https://hotels.ctrip.com/hotels/119084256.html?cityid=95' \
+  --start-date 2026-09-06 --price-mode page_xpath \
+  --show-all-rooms-xpath "//*[@class='你的展开按钮选择器']" \
+  --page-price-xpath "//*[@class='你的价格选择器']"
+```
+
+## 页面聚焦与操作原子性
+
+- CloakBrowser 的 `launch_persistent_context` 没有启动级的“聚焦某个页面”参数。
+- macOS 上 Playwright 直接派生 Chromium 会触发系统 Launch Services 注册崩溃；本 Skill 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再通过本机 CDP 连接回持久化 Context。Windows/Linux 继续使用 CloakBrowser 原生持久化启动。
+- CLI 通过 `--page-index` 或 `--page-url-contains` 明确选择页面；默认使用第 `0` 个页面。
+- 每次输入、点击、跳转或监听前，脚本先对目标 Page 调用 Playwright 的 `bring_to_front()`，再尽力执行 `window.focus()`。
+- `bring_to_front()` 负责标签页前置；操作系统是否允许窗口抢占前台不可由脚本保证。
+- 搜索候选和详情页跳转会把选中的 Page 作为后续操作上下文，不依赖“当前活动标签页”的隐式状态。
+- 浏览器实例、Page 和 Locator 只在本次 CLI 进程内有效；跨进程只复用绝对 Profile、缓存和落盘结果。
+- 同一个绝对 `profile_dir` 同时只能由一个 CloakBrowser 进程使用；若已有窗口占用该 Profile，先关闭该窗口，或给本次命令传入另一个绝对 `--profile-dir`，不要删除原 Profile。
 
 ## 输入与输出
 

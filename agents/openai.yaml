@@ -1,4 +1,4 @@
 interface:
   display_name: "FDE特供携程比价技能"
   short_description: "登录态携程酒店模糊选店、多日期比价、接口或页面 XPath 取价与 Excel 导出"
-  default_prompt: "使用 $ctrip-hotel-price-collector 运行技能脚本，在同一持久化 CloakBrowser Profile 中按模糊酒店名选择携程候选并采集配置日期的房型价格；默认使用 response 价格模式，按配置需要时使用 page_xpath 并先展开所有房型；确认 index.json 与 Excel 已落盘后结束任务，不使用系统默认浏览器。"
+  default_prompt: "使用 $ctrip-hotel-price-collector 的 CLI 原子命令，在登录态下完成携程登录检查、模糊选店或多日期房型比价，并输出 JSON 或 Excel。"

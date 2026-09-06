@@ -17,6 +17,7 @@ from ctrip_hotel_prices import (  # noqa: E402
     default_session_root,
     require_absolute_path,
 )
+from ctrip_cli_browser import focus_page  # noqa: E402
 
 
 URL = "https://www.ctrip.com/"
@@ -44,7 +45,7 @@ def main(argv=None, *, launcher=None, input_fn=input) -> int:
     profile_dir = require_absolute_path(args.profile_dir, "profile_dir")
     if launcher is None:
         try:
-            from cloakbrowser import launch_persistent_context
+            from ctrip_cloak_launcher import launch_persistent_context
         except ModuleNotFoundError:
             print(
                 "缺少 CloakBrowser 依赖，请先执行："
@@ -59,6 +60,7 @@ def main(argv=None, *, launcher=None, input_fn=input) -> int:
         print(f"正在启动 CloakBrowser 持久化会话：{profile_dir}", flush=True)
         browser = launcher(str(profile_dir), headless=False)
         page = browser.pages[0] if browser.pages else browser.new_page()
+        page = focus_page(page)
         page.goto(URL, wait_until="domcontentloaded", timeout=60_000)
         print(f"已打开：{page.url}", flush=True)
         print(f"页面标题：{page.title()}", flush=True)

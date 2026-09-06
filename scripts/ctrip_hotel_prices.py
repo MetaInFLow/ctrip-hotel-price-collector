@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from ctrip_page import focus_page  # noqa: E402
+
 
 HOME_URL = "https://www.ctrip.com/"
 CTRIP_SESSION_URLS = ["https://www.ctrip.com/", "https://hotels.ctrip.com/"]
@@ -334,6 +340,7 @@ def _first_visible(locator: Any) -> Any | None:
 
 
 def wait_for_visible(page: Any, selector: str, timeout_seconds: float, label: str) -> Any:
+    page = focus_page(page)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         candidate = _first_visible(page.locator(selector))
@@ -388,6 +395,7 @@ def wait_for_login(
     session_probe_seconds: float = 15,
     has_persisted_cookies: bool = False,
 ) -> Any:
+    page = focus_page(page)
     probe_deadline = time.monotonic() + min(timeout_seconds, session_probe_seconds)
     logged_in_since: float | None = None
     login_visible_since: float | None = None
@@ -412,6 +420,7 @@ def wait_for_login(
 
     login_button = _first_visible(page.locator(LOGIN_XPATH))
     if login_button is not None:
+        focus_page(page)
         login_button.click()
         print("请在 CloakBrowser 窗口中手动登录你自己的携程账号，脚本会自动等待。", flush=True)
     else:
@@ -801,6 +810,7 @@ def search_hotel(
     timeout_seconds: float,
     input_fn: Any = input,
 ) -> tuple[Any, str]:
+    page = focus_page(page)
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
     search_input = wait_for_visible(
         page, HOTEL_SEARCH_INPUT_XPATH, 60, "酒店模糊搜索框"
@@ -831,6 +841,7 @@ def search_hotel(
     selected_candidate = choose_hotel_candidate(candidates, input_fn=input_fn)
     selected_hotel_name = str(selected_candidate["name"])
     selected_page = selected_candidate.get("page", page)
+    focus_page(selected_page)
     selected_candidate["locator"].click(timeout=5_000)
 
     deadline = time.monotonic() + timeout_seconds
@@ -1003,6 +1014,7 @@ def extract_page_price_rows(
     settle_ms: int = 0,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
+    page = focus_page(page)
     show_selector = normalize_xpath_selector(
         show_all_rooms_xpath,
         "show_all_rooms_xpath",
@@ -1067,6 +1079,7 @@ def capture_room_data(
     page_price_sample_size: int = 0,
     page_price_timeout_seconds: float = 15,
 ) -> dict[str, Any]:
+    page = focus_page(page)
     normalized_mode = normalize_price_mode(price_mode)
     normalized_show_xpath = normalize_xpath_selector(
         show_all_rooms_xpath,
@@ -1564,7 +1577,7 @@ def collect_prices(
         print(f"配置错误：{exc}", file=sys.stderr)
         return 1
     try:
-        from cloakbrowser import launch_persistent_context
+        from ctrip_cloak_launcher import launch_persistent_context
     except ModuleNotFoundError:
         print(
             "缺少 CloakBrowser 依赖，请先执行技能包的"
@@ -1614,6 +1627,7 @@ def collect_prices(
         else:
             print("本地未加载到携程 Cookie，等待手动登录。", flush=True)
         page = browser.pages[0] if browser.pages else browser.new_page()
+        page = focus_page(page)
         page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
         page = wait_for_login(
             browser,
@@ -1647,6 +1661,7 @@ def collect_prices(
                 timeout_seconds=float(config["search_timeout_seconds"]),
             )
             page = detail_page
+            page = focus_page(page)
             if detail_source == "configured":
                 print(f"使用配置中的详情页：{detail_url}", flush=True)
             save_detail_url_cache(detail_url_cache_path, detail_url_cache)

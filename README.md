@@ -15,4 +15,16 @@
 
 Excel 由 Python `openpyxl` 生成，不需要 Node.js。
 
+## CLI 原子功能
+
+统一入口是 `scripts/ctrip_cli.py`：
+
+- `login`：登录并保存持久化会话。
+- `login-status`：检查“我的订单”和 Cookie 数量。
+- `search`：模糊搜索酒店、展示候选并选择详情页。
+- `price`：按起始日期采集价格，支持 `response` 和 `page_xpath`。
+- `collect`：按 JSON 配置执行完整批量采集和 Excel 导出。
+
+页面操作使用显式的 `--page-index` 或 `--page-url-contains` 选页，并在每次操作前调用 `bring_to_front()`；CloakBrowser 不提供启动级页面聚焦参数，操作系统窗口前台状态由系统决定。macOS 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再连接本机 CDP，避免 Playwright 直接派生 Chromium 时的系统启动崩溃；Windows/Linux 使用 CloakBrowser 原生持久化启动。
+
 完整流程与约束见 [SKILL.md](SKILL.md)。
