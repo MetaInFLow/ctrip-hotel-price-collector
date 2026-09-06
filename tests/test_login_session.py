@@ -344,6 +344,14 @@ class LoginSessionTests(unittest.TestCase):
         self.assertTrue(Path(config["profile_dir"]).is_absolute())
         self.assertTrue(Path(config["detail_url_cache_file"]).is_absolute())
         self.assertTrue(Path(config["output_dir"]).is_absolute())
+        self.assertFalse(config["keep_browser_open"])
+
+    def test_sample_config_closes_browser_after_collection(self):
+        config = json.loads(
+            (PROJECT_ROOT / "ctrip_hotel_config.json").read_text(encoding="utf-8")
+        )
+
+        self.assertFalse(config["keep_browser_open"])
 
 
 if __name__ == "__main__":

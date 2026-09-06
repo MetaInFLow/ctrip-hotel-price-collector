@@ -110,7 +110,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - 模拟浏览器、Mideng 或其他托管浏览器的 instance 只在当前任务期间有效；任务完成、工具返回、超时或外部清理后，旧的 `browser`、`page` 和候选定位器都不可继续使用。
 - 持久化边界只有绝对路径的 `profile_dir`、`detail_url_cache_file` 和 `output_dir`。Cookie 值、页面状态、内存候选和浏览器 tab 不作为后续任务输入。
 - 任务状态写入输出目录的 `index.json`：`running` 表示执行中，`ready_for_export` 表示原始结果已落盘，`completed` 表示 Excel 已生成，`failed` 表示任务异常结束。脚本按日期增量保存，实例提前清理后可依据已落盘结果重跑。
-- `keep_browser_open` 只控制人工观察时是否等待关闭，不承诺 instance 持续存在。模拟或无人值守运行可设置为 `false`；任务完成以 `index.json` 和 Excel 文件写入成功为准。
+- `keep_browser_open` 默认是 `false`，采集完成后自动关闭浏览器；需要人工观察时显式设置为 `true`。该配置只控制是否等待关闭，不承诺 instance 持续存在；任务完成以 `index.json` 和 Excel 文件写入成功为准。
 
 ## 新机部署
 

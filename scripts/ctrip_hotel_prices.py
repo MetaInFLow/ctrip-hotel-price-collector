@@ -291,7 +291,7 @@ def load_config(path: Path) -> dict[str, Any]:
     normalized.setdefault("search_timeout_seconds", 45)
     normalized.setdefault("api_timeout_seconds", 45)
     normalized.setdefault("settle_ms", 1500)
-    normalized.setdefault("keep_browser_open", True)
+    normalized.setdefault("keep_browser_open", False)
     validate_price_config(normalized)
     sleep_random_interval(
         normalized["random_sleep_min_seconds"],
@@ -1640,7 +1640,7 @@ def collect_prices(
 
         if login_only:
             print(f"登录会话已保存到：{profile_dir}", flush=True)
-            if config.get("keep_browser_open", True):
+            if config.get("keep_browser_open", False):
                 try:
                     input("登录状态已保存。按 Enter 关闭浏览器：")
                 except EOFError:
@@ -1833,7 +1833,7 @@ def collect_prices(
         else:
             print("Excel 生成失败，原始 JSON 仍已保存。", file=sys.stderr)
             checkpoint("failed", "Excel 生成失败")
-        if config.get("keep_browser_open", True):
+        if config.get("keep_browser_open", False):
             try:
                 input("浏览器仍保持打开。按 Enter 关闭：")
             except EOFError:
