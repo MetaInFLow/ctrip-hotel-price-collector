@@ -1,6 +1,7 @@
 import importlib.util
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +114,26 @@ class CliModuleTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Profile.*占用|启动失败"):
             session.open()
+
+    def test_close_other_pages_keeps_the_selected_page(self):
+        browser_module = load_module("ctrip_cli_browser_close_pages", "ctrip_cli_browser.py")
+
+        class ClosablePage:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        selected = ClosablePage()
+        extra = ClosablePage()
+        browser = SimpleNamespace(pages=[selected, extra])
+
+        closed_count = browser_module.close_other_pages(browser, selected)
+
+        self.assertEqual(closed_count, 1)
+        self.assertFalse(selected.closed)
+        self.assertTrue(extra.closed)
 
     def test_macos_launcher_uses_launch_services_and_cdp(self):
         launcher_module = load_module("ctrip_cloak_launcher_args", "ctrip_cloak_launcher.py")

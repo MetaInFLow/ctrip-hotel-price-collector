@@ -41,4 +41,19 @@ def browser_pages(browser: Any) -> list[Any]:
     return pages
 
 
-__all__ = ["browser_pages", "focus_page"]
+def close_other_pages(browser: Any, selected_page: Any) -> int:
+    """Close all open tabs except the page that owns the next operation."""
+
+    closed_count = 0
+    for page in browser_pages(browser):
+        if page is selected_page:
+            continue
+        try:
+            page.close()
+        except Exception:
+            continue
+        closed_count += 1
+    return closed_count
+
+
+__all__ = ["browser_pages", "close_other_pages", "focus_page"]

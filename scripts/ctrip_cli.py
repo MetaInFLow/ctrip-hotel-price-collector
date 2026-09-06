@@ -14,7 +14,11 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ctrip_cli_auth import ensure_login, login_status  # noqa: E402
-from ctrip_cli_browser import CtripBrowserSession, HOME_URL  # noqa: E402
+from ctrip_cli_browser import (  # noqa: E402
+    CtripBrowserSession,
+    HOME_URL,
+    close_other_pages,
+)
 from ctrip_cli_price import collect_one_stay  # noqa: E402
 from ctrip_cli_search import (  # noqa: E402
     fuzzy_search_hotel,
@@ -210,6 +214,7 @@ def run_search(args: argparse.Namespace) -> int:
             timeout_seconds=args.timeout,
             index=args.select_index,
         )
+        close_other_pages(session.browser, detail_page)
         session.focus(detail_page)
         _json_print(
             {
@@ -275,6 +280,7 @@ def run_price(args: argparse.Namespace) -> int:
                 timeout_seconds=args.search_timeout_seconds,
                 search_hotel_fn=search_fn,
             )
+            close_other_pages(session.browser, page)
             save_detail_url_cache(cache_path, detail_cache)
             hotel_name = args.hotel
 

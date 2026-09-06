@@ -17,7 +17,7 @@ from ctrip_hotel_prices import (  # noqa: E402
     default_session_root,
     require_absolute_path,
 )
-from ctrip_page import browser_pages, focus_page  # noqa: E402
+from ctrip_page import browser_pages, close_other_pages, focus_page  # noqa: E402
 
 
 HOME_URL = "https://www.ctrip.com/"
@@ -131,6 +131,7 @@ __all__ = [
     "CtripBrowserSession",
     "HOME_URL",
     "browser_pages",
+    "close_other_pages",
     "focus_page",
     "select_page",
 ]

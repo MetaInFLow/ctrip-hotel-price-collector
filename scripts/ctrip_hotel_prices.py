@@ -22,7 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from ctrip_page import focus_page  # noqa: E402
+from ctrip_page import close_other_pages, focus_page  # noqa: E402
 
 
 HOME_URL = "https://www.ctrip.com/"
@@ -377,13 +377,13 @@ def count_ctrip_cookies(browser: Any) -> int:
 
 
 def find_logged_in_page(browser: Any, fallback_page: Any) -> Any | None:
-    for page in browser_pages(browser, fallback_page):
-        try:
-            has_orders = _first_visible(page.locator(ORDERS_XPATH)) is not None
-            if has_orders:
-                return page
-        except Exception:
-            continue
+    del browser
+    try:
+        has_orders = _first_visible(fallback_page.locator(ORDERS_XPATH)) is not None
+        if has_orders:
+            return fallback_page
+    except Exception:
+        pass
     return None
 
 
@@ -1661,6 +1661,7 @@ def collect_prices(
                 timeout_seconds=float(config["search_timeout_seconds"]),
             )
             page = detail_page
+            close_other_pages(browser, page)
             page = focus_page(page)
             if detail_source == "configured":
                 print(f"使用配置中的详情页：{detail_url}", flush=True)

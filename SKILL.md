@@ -75,6 +75,8 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - macOS 上 Playwright 直接派生 Chromium 会触发系统 Launch Services 注册崩溃；本 Skill 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再通过本机 CDP 连接回持久化 Context。Windows/Linux 继续使用 CloakBrowser 原生持久化启动。
 - CLI 通过 `--page-index` 或 `--page-url-contains` 明确选择页面；默认使用第 `0` 个页面。
 - 每次输入、点击、跳转或监听前，脚本先对目标 Page 调用 Playwright 的 `bring_to_front()`，再尽力执行 `window.focus()`。
+- 登录校验只读取本次操作重新打开并聚焦的当前 Page；Profile 中旧 Tab 的“我的订单”不会再替当前页面放行。
+- 选定酒店详情页后，脚本会关闭同一会话中的其他 Tab；命令结束时关闭整个浏览器上下文。`keep_browser_open: true` 或 `login --keep-open` 是保留窗口的显式例外。
 - `bring_to_front()` 负责标签页前置；操作系统是否允许窗口抢占前台不可由脚本保证。
 - 搜索候选和详情页跳转会把选中的 Page 作为后续操作上下文，不依赖“当前活动标签页”的隐式状态。
 - 浏览器实例、Page 和 Locator 只在本次 CLI 进程内有效；跨进程只复用绝对 Profile、缓存和落盘结果。

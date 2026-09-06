@@ -197,6 +197,14 @@ class LoginSessionTests(unittest.TestCase):
 
         self.assertIs(module.find_logged_in_page(context, page), page)
 
+    def test_stale_other_tab_cannot_authenticate_the_current_page(self):
+        module = load_collector_module()
+        stale_logged_in_page = FakePage(module, login_visible=False, orders_visible=True)
+        current_logged_out_page = FakePage(module, login_visible=True, orders_visible=False)
+        context = FakeContext([stale_logged_in_page, current_logged_out_page])
+
+        self.assertIsNone(module.find_logged_in_page(context, current_logged_out_page))
+
     def test_counts_loaded_ctrip_cookies_without_exposing_cookie_values(self):
         module = load_collector_module()
 
