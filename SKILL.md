@@ -33,7 +33,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 
 | 命令 | 实现模块 | 原子动作 | 结果 |
 | --- | --- | --- | --- |
-| `login` | `ctrip_cli_auth.py` | 启动持久化 Profile，复用 Cookie；必要时在可见窗口手动登录，并等待“我的订单”稳定出现 | 输出登录状态和 Cookie 数量，不输出 Cookie 值 |
+| `login` | `ctrip_cli_auth.py` | 启动持久化 Profile，复用 Cookie；必要时在可见窗口手动登录，并等待当前页“我的订单”稳定出现且“登录”消失 | 输出登录状态和 Cookie 数量，不输出 Cookie 值 |
 | `login-status` | `ctrip_cli_auth.py` | 打开首页并检查当前 Profile 的登录状态 | JSON；已登录退出码为 `0`，未登录退出码为 `2` |
 | `search` | `ctrip_cli_search.py` | 输入模糊酒店名，读取有效候选；交互选择后打开详情页 | 候选列表或选中的酒店名、区域、详情 URL |
 | `price` | `ctrip_cli_price.py` | 从指定起始日期生成连续入住区间，按日期采集价格 | `response` 模式获取接口 JSON；`page_xpath` 模式读取页面 XPath 价格 |
@@ -75,7 +75,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - macOS 上 Playwright 直接派生 Chromium 会触发系统 Launch Services 注册崩溃；本 Skill 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再通过本机 CDP 连接回持久化 Context。Windows/Linux 继续使用 CloakBrowser 原生持久化启动。
 - CLI 通过 `--page-index` 或 `--page-url-contains` 明确选择页面；默认使用第 `0` 个页面。
 - 每次输入、点击、跳转或监听前，脚本先对目标 Page 调用 Playwright 的 `bring_to_front()`，再尽力执行 `window.focus()`。
-- 登录校验只读取本次操作重新打开并聚焦的当前 Page；Profile 中旧 Tab 的“我的订单”不会再替当前页面放行。
+- 登录校验只读取本次操作重新打开并聚焦的当前 Page；成功条件是当前页“我的订单”可见且“登录”不可见。Profile 中旧 Tab 的标识不会替当前页面放行，Cookie 数量只作为诊断信息。
 - 选定酒店详情页后，脚本会关闭同一会话中的其他 Tab；命令结束时关闭整个浏览器上下文。`keep_browser_open: true` 或 `login --keep-open` 是保留窗口的显式例外。
 - `bring_to_front()` 负责标签页前置；操作系统是否允许窗口抢占前台不可由脚本保证。
 - 搜索候选和详情页跳转会把选中的 Page 作为后续操作上下文，不依赖“当前活动标签页”的隐式状态。
@@ -93,8 +93,8 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 1. 先读取 `ctrip_hotel_config.json` 或用户指定的 JSON 配置。
 2. 新机器先完成“新机部署”步骤，确认 Python、CloakBrowser 和 Excel 运行时可用。
 3. 运行 `scripts/ctrip_hotel_prices.py`，使用可见的持久化 CloakBrowser Profile；启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
-4. 已有 Cookie 时，脚本先在同一 Profile 内持续探测登录状态，等待 `//*[normalize-space()='我的订单']` 稳定出现；探测失败后才点击登录入口。
-5. 首次登录只在脚本启动的 CloakBrowser 窗口中由用户手动完成；脚本持续轮询 `//*[normalize-space()='我的订单']`，确认登录标识稳定后才继续。
+4. 已有 Cookie 时，脚本先在同一 Profile 的当前 Page 内持续探测登录状态，要求 `//*[normalize-space()='我的订单']` 稳定出现且 `//span[normalize-space()='登录']` 不可见；探测失败后才点击登录入口。公共 Cookie 不会直接放行。
+5. 首次登录只在脚本启动的 CloakBrowser 窗口中由用户手动完成；脚本持续轮询当前 Page 的两个登录信号，确认登录标识稳定后才继续。
 6. 解析酒店详情页，按以下优先级处理：
    - 有 `detail_url`：直接使用配置地址，并刷新详情页缓存。
    - 无配置地址但缓存命中：复用与酒店名称、城市匹配的缓存地址。

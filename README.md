@@ -20,7 +20,7 @@ Excel 由 Python `openpyxl` 生成，不需要 Node.js。
 统一入口是 `scripts/ctrip_cli.py`：
 
 - `login`：登录并保存持久化会话。
-- `login-status`：检查“我的订单”和 Cookie 数量。
+- `login-status`：检查当前页“我的订单”可见且“登录”不可见；Cookie 数量只作诊断信息。
 - `search`：模糊搜索酒店、展示候选并选择详情页。
 - `price`：按起始日期采集价格，支持 `response` 和 `page_xpath`。
 - `collect`：按 JSON 配置执行完整批量采集和 Excel 导出。

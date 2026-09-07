@@ -380,7 +380,8 @@ def find_logged_in_page(browser: Any, fallback_page: Any) -> Any | None:
     del browser
     try:
         has_orders = _first_visible(fallback_page.locator(ORDERS_XPATH)) is not None
-        if has_orders:
+        has_login = _first_visible(fallback_page.locator(LOGIN_XPATH)) is not None
+        if has_orders and not has_login:
             return fallback_page
     except Exception:
         pass
@@ -396,6 +397,7 @@ def wait_for_login(
     has_persisted_cookies: bool = False,
 ) -> Any:
     page = focus_page(page)
+    del has_persisted_cookies
     probe_deadline = time.monotonic() + min(timeout_seconds, session_probe_seconds)
     logged_in_since: float | None = None
     login_visible_since: float | None = None
@@ -412,7 +414,7 @@ def wait_for_login(
 
         if _first_visible(page.locator(LOGIN_XPATH)) is not None:
             login_visible_since = login_visible_since or now
-            if not has_persisted_cookies and now - login_visible_since >= 2:
+            if now - login_visible_since >= 2:
                 break
         else:
             login_visible_since = None

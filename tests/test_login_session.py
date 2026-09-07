@@ -160,7 +160,7 @@ class LoginSessionTests(unittest.TestCase):
         class DelayedPage:
             def __init__(self):
                 self.orders_checks = 0
-                self.login_locator = Locator(lambda: True)
+                self.login_locator = Locator(lambda: self.orders_checks < 3)
 
             def locator(self, selector):
                 if selector == module.ORDERS_XPATH:
@@ -190,9 +190,16 @@ class LoginSessionTests(unittest.TestCase):
         self.assertIs(result, page)
         self.assertFalse(page.login_locator.clicked)
 
-    def test_visible_orders_means_logged_in_even_when_login_trigger_remains(self):
+    def test_visible_login_trigger_overrides_the_orders_marker(self):
         module = load_collector_module()
         page = FakePage(module, login_visible=True, orders_visible=True)
+        context = FakeContext([page])
+
+        self.assertIsNone(module.find_logged_in_page(context, page))
+
+    def test_visible_orders_without_login_trigger_means_logged_in(self):
+        module = load_collector_module()
+        page = FakePage(module, login_visible=False, orders_visible=True)
         context = FakeContext([page])
 
         self.assertIs(module.find_logged_in_page(context, page), page)
