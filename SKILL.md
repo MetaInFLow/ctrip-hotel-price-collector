@@ -82,6 +82,14 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - 浏览器实例、Page 和 Locator 只在本次 CLI 进程内有效；跨进程只复用绝对 Profile、缓存和落盘结果。
 - 同一个绝对 `profile_dir` 同时只能由一个 CloakBrowser 进程使用；若已有窗口占用该 Profile，先关闭该窗口，或给本次命令传入另一个绝对 `--profile-dir`，不要删除原 Profile。
 
+## 统一登录门禁
+
+- 登录判断的唯一实现是 `scripts/ctrip_login_guard.py`。它只检查当前聚焦页面，要求 `//*[normalize-space()='我的订单']` 可见且 `//span[normalize-space()='登录']` 不可见；公共导航中的“我的订单”不能单独证明已登录。
+- `check_login(browser, page)` 可独立返回登录状态、两个页面信号、Cookie 数量和当前 URL，不返回 Cookie 值。
+- `require_logged_in(browser, page, operation=...)` 是搜索、候选选择、详情解析和房价采集的强制门禁。任何门禁失败都抛出 `LoginRequiredError`，当前操作停止。
+- `ctrip_cli_auth.py` 的 `login-status` 直接调用 `check_login`；`login` 完成等待后再次调用 `require_logged_in`。`ctrip_cli_search.py`、`ctrip_cli_price.py` 和 `ctrip_hotel_prices.py` 的原子操作均保留代码驱动的门禁调用，不提供跳过登录的参数。
+- `capture_room_data` 和 `collect_one_stay` 必须接收同一浏览器上下文；调用方无法通过省略上下文绕过登录检查。
+
 ## 输入与输出
 
 - 输入：`ctrip_hotel_config.json` 或用户指定的配置文件。酒店项支持 `name`、可选 `detail_url` 和 `city_id`；日期支持连续区间或显式区间；`price_mode` 支持 `response`（默认）和 `page_xpath`。

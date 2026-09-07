@@ -14,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ctrip_cli_browser import HOME_URL, browser_pages, focus_page  # noqa: E402
+from ctrip_login_guard import require_logged_in  # noqa: E402
 from ctrip_hotel_prices import (  # noqa: E402
     HOTEL_SEARCH_BUTTON_XPATH,
     HOTEL_SEARCH_INPUT_XPATH,
@@ -36,8 +37,9 @@ def search_candidates(
 
     if not str(keyword).strip():
         raise ValueError("酒店模糊搜索词不能为空")
-    page = focus_page(page)
+    page = require_logged_in(browser, page, operation="酒店模糊搜索")
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
+    page = require_logged_in(browser, page, operation="酒店模糊搜索")
     search_input = wait_for_visible(
         page,
         HOTEL_SEARCH_INPUT_XPATH,
@@ -82,6 +84,7 @@ def select_candidate(
 ) -> tuple[Any, dict[str, Any]]:
     """Select one 1-based candidate and wait for its detail page."""
 
+    page = require_logged_in(browser, page, operation="酒店候选选择")
     if index is None:
         selected = choose_hotel_candidate(candidates, input_fn=input_fn)
     else:

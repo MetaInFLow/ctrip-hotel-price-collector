@@ -47,13 +47,26 @@ class Locator:
 class Page:
     def __init__(self, module):
         self.module = module
+        self.url = "https://www.ctrip.com/"
         self.show_all_button = Locator("展示所有房型")
         self.price_locator = Locator(["￥418起", "¥1,299.50"])
         self.room_locator = Locator(["豪华大床房", "行政套房"])
         self.selectors = []
+        self.login_visible = False
+        self.orders_visible = True
+
+    def bring_to_front(self):
+        pass
+
+    def evaluate(self, _expression):
+        pass
 
     def locator(self, selector):
         self.selectors.append(selector)
+        if selector == self.module.LOGIN_XPATH:
+            return Locator("登录") if self.login_visible else EmptyLocator()
+        if selector == self.module.ORDERS_XPATH:
+            return Locator("我的订单") if self.orders_visible else EmptyLocator()
         if selector == "xpath=//show-all":
             return self.show_all_button
         if selector == "xpath=//price":
@@ -80,6 +93,11 @@ class Response:
         return {"data": {}}
 
 
+class EmptyLocator(Locator):
+    def __init__(self):
+        super().__init__([])
+
+
 class CapturingPage(Page):
     def __init__(self, module):
         super().__init__(module)
@@ -102,6 +120,11 @@ class CapturingPage(Page):
     def remove_listener(self, event, handler):
         self.assert_response_event(event)
         self.removed_handler = handler
+
+
+class Browser:
+    def __init__(self, page):
+        self.pages = [page]
 
 
 class PriceModeTests(unittest.TestCase):
@@ -131,7 +154,7 @@ class PriceModeTests(unittest.TestCase):
         )
 
         self.assertTrue(page.show_all_button.clicked)
-        self.assertEqual(page.selectors[:3], [
+        self.assertEqual(page.selectors[-3:], [
             "xpath=//show-all",
             "xpath=//price",
             "xpath=//room",
@@ -200,6 +223,7 @@ class PriceModeTests(unittest.TestCase):
         collection = module.capture_room_data(
             page,
             "https://hotels.ctrip.com/hotels/1.html?cityid=95",
+            browser=Browser(page),
             api_timeout_seconds=1,
             settle_ms=0,
             price_mode="response",
@@ -212,6 +236,18 @@ class PriceModeTests(unittest.TestCase):
         self.assertEqual(len(collection["responses"]), 1)
         self.assertEqual(len(collection["page_price_rows"]), 1)
         self.assertIsNotNone(page.removed_handler)
+
+    def test_capture_room_data_requires_a_browser_for_the_login_gate(self):
+        module = load_collector_module()
+        page = CapturingPage(module)
+
+        with self.assertRaisesRegex(TypeError, "browser"):
+            module.capture_room_data(
+                page,
+                "https://hotels.ctrip.com/hotels/1.html",
+                api_timeout_seconds=1,
+                settle_ms=0,
+            )
 
 
 if __name__ == "__main__":

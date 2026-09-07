@@ -22,11 +22,22 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from ctrip_login_guard import (  # noqa: E402
+    CTRIP_SESSION_URLS,
+    LOGIN_XPATH,
+    ORDERS_XPATH,
+    LoginRequiredError,
+    _first_visible,
+    check_login,
+    count_ctrip_cookies,
+    find_logged_in_page,
+    require_logged_in,
+    wait_for_login,
+)
 from ctrip_page import close_other_pages, focus_page  # noqa: E402
 
 
 HOME_URL = "https://www.ctrip.com/"
-CTRIP_SESSION_URLS = ["https://www.ctrip.com/", "https://hotels.ctrip.com/"]
 SESSION_APP_NAME = "ctrip-hotel-price-collector"
 DEFAULT_PROFILE_NAME = ".cloakbrowser-profile"
 DEFAULT_DETAIL_CACHE_NAME = ".ctrip-hotel-detail-cache.json"
@@ -321,24 +332,6 @@ def resolve_detail_url_cache_path(config: dict[str, Any], config_dir: Path) -> P
     )
 
 
-def _first_visible(locator: Any) -> Any | None:
-    try:
-        count = locator.count()
-    except Exception:
-        try:
-            return locator if locator.is_visible() else None
-        except Exception:
-            return None
-    for index in range(count):
-        candidate = locator.nth(index)
-        try:
-            if candidate.is_visible():
-                return candidate
-        except Exception:
-            continue
-    return None
-
-
 def wait_for_visible(page: Any, selector: str, timeout_seconds: float, label: str) -> Any:
     page = focus_page(page)
     deadline = time.monotonic() + timeout_seconds
@@ -364,94 +357,6 @@ def browser_pages(browser: Any, fallback_page: Any) -> list[Any]:
     if fallback_page not in pages:
         pages.append(fallback_page)
     return pages
-
-
-def count_ctrip_cookies(browser: Any) -> int:
-    cookie_reader = getattr(browser, "cookies", None)
-    if not callable(cookie_reader):
-        return 0
-    try:
-        return len(cookie_reader(CTRIP_SESSION_URLS))
-    except Exception:
-        return 0
-
-
-def find_logged_in_page(browser: Any, fallback_page: Any) -> Any | None:
-    del browser
-    try:
-        has_orders = _first_visible(fallback_page.locator(ORDERS_XPATH)) is not None
-        has_login = _first_visible(fallback_page.locator(LOGIN_XPATH)) is not None
-        if has_orders and not has_login:
-            return fallback_page
-    except Exception:
-        pass
-    return None
-
-
-def wait_for_login(
-    browser: Any,
-    page: Any,
-    timeout_seconds: float,
-    *,
-    session_probe_seconds: float = 15,
-    has_persisted_cookies: bool = False,
-) -> Any:
-    page = focus_page(page)
-    del has_persisted_cookies
-    probe_deadline = time.monotonic() + min(timeout_seconds, session_probe_seconds)
-    logged_in_since: float | None = None
-    login_visible_since: float | None = None
-    while time.monotonic() < probe_deadline:
-        logged_in_page = find_logged_in_page(browser, page)
-        now = time.monotonic()
-        if logged_in_page is not None:
-            logged_in_since = logged_in_since or now
-            if now - logged_in_since >= 1:
-                print("已通过本地会话检测到“我的订单”，直接使用已登录状态。", flush=True)
-                return logged_in_page
-        else:
-            logged_in_since = None
-
-        if _first_visible(page.locator(LOGIN_XPATH)) is not None:
-            login_visible_since = login_visible_since or now
-            if now - login_visible_since >= 2:
-                break
-        else:
-            login_visible_since = None
-        page.wait_for_timeout(500)
-
-    login_button = _first_visible(page.locator(LOGIN_XPATH))
-    if login_button is not None:
-        focus_page(page)
-        login_button.click()
-        print("请在 CloakBrowser 窗口中手动登录你自己的携程账号，脚本会自动等待。", flush=True)
-    else:
-        logged_in_page = find_logged_in_page(browser, page)
-        if logged_in_page is not None:
-            print("已检测到“我的订单”，当前账号已登录。", flush=True)
-            return logged_in_page
-        raise TimeoutError("找不到登录入口，也未检测到已登录状态")
-
-    deadline = time.monotonic() + timeout_seconds
-    next_notice = time.monotonic() + 10
-    logged_in_since = None
-    while time.monotonic() < deadline:
-        logged_in_page = find_logged_in_page(browser, page)
-        now = time.monotonic()
-        if logged_in_page is not None:
-            logged_in_since = logged_in_since or now
-            if now - logged_in_since >= 1:
-                print("已检测到“我的订单”，登录成功。", flush=True)
-                return logged_in_page
-        else:
-            logged_in_since = None
-        if time.monotonic() >= next_notice:
-            remaining = max(0, int(deadline - time.monotonic()))
-            print(f"仍在等待登录完成，剩余约 {remaining} 秒。", flush=True)
-            next_notice = time.monotonic() + 10
-        page.wait_for_timeout(1000)
-
-    raise TimeoutError(f"等待登录超时（{timeout_seconds:g} 秒），未发现“我的订单”")
 
 
 def normalized_text(value: str) -> str:
@@ -812,8 +717,9 @@ def search_hotel(
     timeout_seconds: float,
     input_fn: Any = input,
 ) -> tuple[Any, str]:
-    page = focus_page(page)
+    page = require_logged_in(browser, page, operation="酒店模糊搜索")
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
+    page = require_logged_in(browser, page, operation="酒店模糊搜索")
     search_input = wait_for_visible(
         page, HOTEL_SEARCH_INPUT_XPATH, 60, "酒店模糊搜索框"
     )
@@ -891,6 +797,7 @@ def resolve_hotel_detail(
     timeout_seconds: float,
     search_hotel_fn: Any = search_hotel,
 ) -> tuple[Any, str, str]:
+    page = require_logged_in(browser, page, operation="酒店详情页解析")
     hotel_name = str(hotel["name"]).strip()
     city_id = hotel.get("city_id", config.get("city_id"))
     configured_url = str(hotel.get("detail_url", "")).strip()
@@ -1072,6 +979,7 @@ def capture_room_data(
     page: Any,
     detail_url: str,
     *,
+    browser: Any,
     api_timeout_seconds: float,
     settle_ms: int,
     price_mode: str = "response",
@@ -1081,7 +989,7 @@ def capture_room_data(
     page_price_sample_size: int = 0,
     page_price_timeout_seconds: float = 15,
 ) -> dict[str, Any]:
-    page = focus_page(page)
+    page = require_logged_in(browser, page, operation="房价采集")
     normalized_mode = normalize_price_mode(price_mode)
     normalized_show_xpath = normalize_xpath_selector(
         show_all_rooms_xpath,
@@ -1128,6 +1036,7 @@ def capture_room_data(
     page.on("response", handle_response)
     try:
         page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
+        page = require_logged_in(browser, page, operation="房价采集")
         if normalized_mode == "response":
             response_deadline = time.monotonic() + api_timeout_seconds
             while not responses and time.monotonic() < response_deadline:
@@ -1179,12 +1088,14 @@ def capture_room_list_responses(
     page: Any,
     detail_url: str,
     *,
+    browser: Any,
     api_timeout_seconds: float,
     settle_ms: int,
 ) -> list[dict[str, Any]]:
     return capture_room_data(
         page,
         detail_url,
+        browser=browser,
         api_timeout_seconds=api_timeout_seconds,
         settle_ms=settle_ms,
         price_mode="response",
@@ -1638,6 +1549,7 @@ def collect_prices(
             session_probe_seconds=float(config["session_probe_seconds"]),
             has_persisted_cookies=cookie_count > 0,
         )
+        page = require_logged_in(browser, page, operation="酒店价格采集")
         checkpoint("running")
 
         if login_only:
@@ -1694,6 +1606,7 @@ def collect_prices(
                     collection = capture_room_data(
                         detail_page,
                         target_url,
+                        browser=browser,
                         api_timeout_seconds=float(config["api_timeout_seconds"]),
                         settle_ms=int(config["settle_ms"]),
                         price_mode=price_mode,

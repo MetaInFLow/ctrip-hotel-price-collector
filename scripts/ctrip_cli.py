@@ -169,7 +169,11 @@ def run_login(args: argparse.Namespace) -> int:
             session_probe_seconds=args.session_probe_seconds,
         )
         session.focus(page)
-        result = login_status(session.browser, page)
+        result = login_status(
+            session.browser,
+            page,
+            timeout_seconds=args.timeout,
+        )
         result["profile_dir"] = str(session.profile_dir)
         _json_print(result)
         if args.keep_open:
@@ -184,7 +188,11 @@ def run_login_status(args: argparse.Namespace) -> int:
         url_contains=args.page_url_contains,
     ) as session:
         page = session.goto(HOME_URL)
-        result = login_status(session.browser, page)
+        result = login_status(
+            session.browser,
+            page,
+            timeout_seconds=args.timeout,
+        )
         result["profile_dir"] = str(session.profile_dir)
         _json_print(result)
         return 0 if result["logged_in"] else 2
@@ -298,6 +306,7 @@ def run_price(args: argparse.Namespace) -> int:
                 detail_url,
                 check_in,
                 check_out,
+                browser=session.browser,
                 config=config,
             )
             for check_in, check_out in stays

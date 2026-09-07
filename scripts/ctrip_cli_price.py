@@ -13,6 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ctrip_cli_browser import focus_page  # noqa: E402
+from ctrip_login_guard import require_logged_in  # noqa: E402
 from ctrip_hotel_prices import (  # noqa: E402
     build_detail_url,
     build_page_price_checks,
@@ -30,13 +31,14 @@ def collect_one_stay(
     check_in: date,
     check_out: date,
     *,
+    browser: Any,
     config: dict[str, Any],
     source_file: str = "",
 ) -> dict[str, Any]:
     """Collect one stay; the operation owns one focused page and one URL."""
 
     validate_price_config(config)
-    page = focus_page(page)
+    page = require_logged_in(browser, page, operation="房价采集")
     target_url = build_detail_url(
         detail_url,
         check_in,
@@ -49,6 +51,7 @@ def collect_one_stay(
     collection = capture_room_data(
         page,
         target_url,
+        browser=browser,
         api_timeout_seconds=float(config.get("api_timeout_seconds", 45)),
         settle_ms=int(config.get("settle_ms", 1500)),
         price_mode=config["price_mode"],

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -12,22 +13,39 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ctrip_cli_browser import HOME_URL, focus_page  # noqa: E402
-from ctrip_hotel_prices import (  # noqa: E402
+from ctrip_login_guard import (  # noqa: E402
+    check_login,
     count_ctrip_cookies,
-    find_logged_in_page,
+    require_logged_in,
     wait_for_login,
 )
 
 
-def login_status(browser: Any, page: Any) -> dict[str, Any]:
+def login_status(
+    browser: Any,
+    page: Any,
+    *,
+    timeout_seconds: float = 0,
+) -> dict[str, Any]:
     """Inspect one focused page and return a value-only login status payload."""
 
     page = focus_page(page)
-    logged_in_page = find_logged_in_page(browser, page)
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    status = check_login(browser, page)
+    while (
+        not status["logged_in"]
+        and not status["login_visible"]
+        and time.monotonic() < deadline
+    ):
+        page.wait_for_timeout(250)
+        status = check_login(browser, page)
     return {
-        "logged_in": logged_in_page is not None,
-        "cookie_count": count_ctrip_cookies(browser),
-        "url": str(getattr(logged_in_page or page, "url", "")),
+        "logged_in": status["logged_in"],
+        "orders_visible": status["orders_visible"],
+        "login_visible": status["login_visible"],
+        "signals_readable": status["signals_readable"],
+        "cookie_count": status["cookie_count"],
+        "url": status["url"],
     }
 
 
@@ -42,13 +60,14 @@ def ensure_login(
 
     page = focus_page(page)
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
-    return wait_for_login(
+    page = wait_for_login(
         browser,
         page,
         timeout_seconds,
         session_probe_seconds=session_probe_seconds,
         has_persisted_cookies=count_ctrip_cookies(browser) > 0,
     )
+    return require_logged_in(browser, page, operation="登录后的后续操作")
 
 
 __all__ = ["ensure_login", "login_status"]
