@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +13,10 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from ctrip_cli_browser import HOME_URL, focus_page  # noqa: E402
 from ctrip_login_guard import (  # noqa: E402
-    check_login,
     count_ctrip_cookies,
     require_logged_in,
     wait_for_login,
+    wait_for_stable_login_status,
 )
 
 
@@ -30,15 +29,7 @@ def login_status(
     """Inspect one focused page and return a value-only login status payload."""
 
     page = focus_page(page)
-    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
-    status = check_login(browser, page)
-    while (
-        not status["logged_in"]
-        and not status["login_visible"]
-        and time.monotonic() < deadline
-    ):
-        page.wait_for_timeout(250)
-        status = check_login(browser, page)
+    status = wait_for_stable_login_status(browser, page, timeout_seconds)
     return {
         "logged_in": status["logged_in"],
         "orders_visible": status["orders_visible"],

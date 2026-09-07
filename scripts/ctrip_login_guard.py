@@ -19,6 +19,7 @@ HOME_URL = "https://www.ctrip.com/"
 CTRIP_SESSION_URLS = ["https://www.ctrip.com/", "https://hotels.ctrip.com/"]
 LOGIN_XPATH = "xpath=//span[normalize-space()='登录']"
 ORDERS_XPATH = "xpath=//*[normalize-space()='我的订单']"
+LOGIN_STATE_STABILITY_SECONDS = 1.5
 
 
 class LoginRequiredError(RuntimeError):
@@ -103,6 +104,44 @@ def find_logged_in_page(browser: Any, page: Any) -> Any | None:
     return page if check_login(browser, page)["logged_in"] else None
 
 
+def wait_for_stable_login_status(
+    browser: Any,
+    page: Any,
+    timeout_seconds: float,
+    *,
+    stable_seconds: float = LOGIN_STATE_STABILITY_SECONDS,
+) -> dict[str, Any]:
+    """Wait until a clear login or logout signal remains stable."""
+
+    page = focus_page(page)
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    stable_seconds = max(0.0, float(stable_seconds))
+    logged_in_since: float | None = None
+    logged_out_since: float | None = None
+    status = check_login(browser, page)
+
+    while True:
+        now = time.monotonic()
+        if status["logged_in"]:
+            logged_in_since = logged_in_since or now
+            logged_out_since = None
+            if now - logged_in_since >= stable_seconds:
+                return status
+        elif status["orders_visible"] and status["login_visible"]:
+            logged_out_since = logged_out_since or now
+            logged_in_since = None
+            if now - logged_out_since >= stable_seconds:
+                return status
+        else:
+            logged_in_since = None
+            logged_out_since = None
+
+        if now >= deadline:
+            return status
+        page.wait_for_timeout(250)
+        status = check_login(browser, page)
+
+
 def require_logged_in(
     browser: Any,
     page: Any,
@@ -146,35 +185,16 @@ def wait_for_login(
     page = focus_page(page)
     timeout_seconds = float(timeout_seconds)
     session_probe_seconds = max(0.0, float(session_probe_seconds))
-    probe_deadline = time.monotonic() + min(timeout_seconds, session_probe_seconds)
-    logged_in_since: float | None = None
-    login_visible_since: float | None = None
-
-    while time.monotonic() < probe_deadline:
-        now = time.monotonic()
-        status = check_login(browser, page)
-        if status["logged_in"]:
-            logged_in_since = logged_in_since or now
-            if now - logged_in_since >= 1:
-                print(
-                    "已通过本地会话检测到“我的订单”且“登录”已消失，直接使用已登录状态。",
-                    flush=True,
-                )
-                return page
-        else:
-            logged_in_since = None
-
-        if status["login_visible"]:
-            login_visible_since = login_visible_since or now
-            if now - login_visible_since >= 2:
-                break
-        else:
-            login_visible_since = None
-        page.wait_for_timeout(500)
-
-    status = check_login(browser, page)
+    status = wait_for_stable_login_status(
+        browser,
+        page,
+        min(timeout_seconds, session_probe_seconds),
+    )
     if status["logged_in"]:
-        print("已检测到已登录状态。", flush=True)
+        print(
+            "已通过本地会话检测到“我的订单”且“登录”已消失，直接使用已登录状态。",
+            flush=True,
+        )
         return page
 
     login_button = _first_visible(page.locator(LOGIN_XPATH))
@@ -190,13 +210,13 @@ def wait_for_login(
 
     deadline = time.monotonic() + timeout_seconds
     next_notice = time.monotonic() + 10
-    logged_in_since = None
+    logged_in_since: float | None = None
     while time.monotonic() < deadline:
         now = time.monotonic()
         status = check_login(browser, page)
         if status["logged_in"]:
             logged_in_since = logged_in_since or now
-            if now - logged_in_since >= 1:
+            if now - logged_in_since >= LOGIN_STATE_STABILITY_SECONDS:
                 print("已检测到“我的订单”且“登录”已消失，登录成功。", flush=True)
                 return page
         else:
@@ -222,6 +242,8 @@ __all__ = [
     "check_login",
     "count_ctrip_cookies",
     "find_logged_in_page",
+    "LOGIN_STATE_STABILITY_SECONDS",
     "require_logged_in",
     "wait_for_login",
+    "wait_for_stable_login_status",
 ]

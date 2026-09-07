@@ -76,7 +76,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - CLI 通过 `--page-index` 或 `--page-url-contains` 明确选择页面；默认使用第 `0` 个页面。
 - 每次输入、点击、跳转或监听前，脚本先对目标 Page 调用 Playwright 的 `bring_to_front()`，再尽力执行 `window.focus()`。
 - 登录校验只读取本次操作重新打开并聚焦的当前 Page；成功条件是当前页“我的订单”可见且“登录”不可见。Profile 中旧 Tab 的标识不会替当前页面放行，Cookie 数量只作为诊断信息。
-- 选定酒店详情页后，脚本会关闭同一会话中的其他 Tab；命令结束时关闭整个浏览器上下文。`keep_browser_open: true` 或 `login --keep-open` 是保留窗口的显式例外。
+- 选定酒店详情页后，脚本会关闭同一会话中的其他 Tab；命令结束时关闭整个浏览器上下文。`keep_browser_open: true` 或 `login --keep-open` 是保留窗口的显式例外；无交互终端收到 EOF 时按正常关闭处理，已保存的会话不受影响。
 - `bring_to_front()` 负责标签页前置；操作系统是否允许窗口抢占前台不可由脚本保证。
 - 搜索候选和详情页跳转会把选中的 Page 作为后续操作上下文，不依赖“当前活动标签页”的隐式状态。
 - 浏览器实例、Page 和 Locator 只在本次 CLI 进程内有效；跨进程只复用绝对 Profile、缓存和落盘结果。
@@ -87,7 +87,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - 登录判断的唯一实现是 `scripts/ctrip_login_guard.py`。它只检查当前聚焦页面，要求 `//*[normalize-space()='我的订单']` 可见且 `//span[normalize-space()='登录']` 不可见；公共导航中的“我的订单”不能单独证明已登录。
 - `check_login(browser, page)` 可独立返回登录状态、两个页面信号、Cookie 数量和当前 URL，不返回 Cookie 值。
 - `require_logged_in(browser, page, operation=...)` 是搜索、候选选择、详情解析和房价采集的强制门禁。任何门禁失败都抛出 `LoginRequiredError`，当前操作停止。
-- `ctrip_cli_auth.py` 的 `login-status` 直接调用 `check_login`；`login` 完成等待后再次调用 `require_logged_in`。`ctrip_cli_search.py`、`ctrip_cli_price.py` 和 `ctrip_hotel_prices.py` 的原子操作均保留代码驱动的门禁调用，不提供跳过登录的参数。
+- `ctrip_cli_auth.py` 的 `login-status` 通过 `check_login` 持续轮询，要求明确的已登录或已登出信号稳定后再返回；`login` 完成等待后再次调用 `require_logged_in`。`ctrip_cli_search.py`、`ctrip_cli_price.py` 和 `ctrip_hotel_prices.py` 的原子操作均保留代码驱动的门禁调用，不提供跳过登录的参数。
 - `capture_room_data` 和 `collect_one_stay` 必须接收同一浏览器上下文；调用方无法通过省略上下文绕过登录检查。
 
 ## 输入与输出

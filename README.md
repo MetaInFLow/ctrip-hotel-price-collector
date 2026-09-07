@@ -20,13 +20,13 @@ Excel 由 Python `openpyxl` 生成，不需要 Node.js。
 统一入口是 `scripts/ctrip_cli.py`：
 
 - `login`：登录并保存持久化会话。
-- `login-status`：检查当前页“我的订单”可见且“登录”不可见；Cookie 数量只作诊断信息。
+- `login-status`：等待当前页登录信号稳定后检查“我的订单”可见且“登录”不可见；Cookie 数量只作诊断信息。
 - `search`：模糊搜索酒店、展示候选并选择详情页。
 - `price`：按起始日期采集价格，支持 `response` 和 `page_xpath`。
 - `collect`：按 JSON 配置执行完整批量采集和 Excel 导出。
 
 页面操作使用显式的 `--page-index` 或 `--page-url-contains` 选页，并在每次操作前调用 `bring_to_front()`；CloakBrowser 不提供启动级页面聚焦参数，操作系统窗口前台状态由系统决定。macOS 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再连接本机 CDP，避免 Playwright 直接派生 Chromium 时的系统启动崩溃；Windows/Linux 使用 CloakBrowser 原生持久化启动。
 
-所有原子操作都经过 `scripts/ctrip_login_guard.py` 的代码门禁。登录状态必须同时满足“我的订单”可见和“登录”不可见；`login-status` 可单独执行此检查。搜索、候选选择、详情解析、接口响应取价和页面 XPath 取价都会在继续前验证登录状态，价格底层函数强制接收浏览器上下文。
+所有原子操作都经过 `scripts/ctrip_login_guard.py` 的代码门禁。登录状态必须同时满足“我的订单”可见和“登录”不可见，并在稳定窗口内保持；`login-status` 可单独执行此检查。搜索、候选选择、详情解析、接口响应取价和页面 XPath 取价都会在继续前验证登录状态，价格底层函数强制接收浏览器上下文。登录会话保存后，命令默认正常关闭浏览器；无交互终端中的 EOF 也按正常关闭处理。
 
 完整流程与约束见 [SKILL.md](SKILL.md)。

@@ -177,7 +177,19 @@ def run_login(args: argparse.Namespace) -> int:
         result["profile_dir"] = str(session.profile_dir)
         _json_print(result)
         if args.keep_open:
-            input("登录状态已保存。按 Enter 关闭浏览器：")
+            try:
+                input("登录状态已保存。按 Enter 关闭浏览器：")
+            except EOFError:
+                print(
+                    "当前终端没有可等待的输入，登录会话已保存，浏览器正常关闭。",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        else:
+            print(
+                "登录会话已保存，命令正常结束；浏览器将关闭，后续命令会复用本地会话。",
+                flush=True,
+            )
     return 0
 
 

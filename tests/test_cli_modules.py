@@ -2,6 +2,7 @@ import importlib.util
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -150,6 +151,115 @@ class CliModuleTests(unittest.TestCase):
         self.assertIn("--user-data-dir=/tmp/ctrip-profile", command)
         self.assertIn("--remote-debugging-port=19229", command)
         self.assertIn("--fingerprint=12345", command)
+
+    def test_login_status_waits_through_transient_login_marker(self):
+        auth_module = load_module(
+            "ctrip_cli_auth_status_stability",
+            "ctrip_cli_auth.py",
+        )
+
+        class SequenceLocator:
+            def __init__(self, page, signal):
+                self.page = page
+                self.signal = signal
+
+            def count(self):
+                return 1
+
+            def nth(self, _index):
+                return self
+
+            def is_visible(self):
+                state = self.page.states[self.page.state_index]
+                visible = state[self.signal]
+                if self.signal == "login":
+                    self.page.state_index = min(
+                        self.page.state_index + 1,
+                        len(self.page.states) - 1,
+                    )
+                return visible
+
+        class SequencePage:
+            url = "https://www.ctrip.com/"
+
+            def __init__(self):
+                self.states = [
+                    {"orders": True, "login": True},
+                    {"orders": True, "login": False},
+                ]
+                self.state_index = 0
+
+            def locator(self, selector):
+                if selector == "xpath=//*[normalize-space()='我的订单']":
+                    return SequenceLocator(self, "orders")
+                if selector == "xpath=//span[normalize-space()='登录']":
+                    return SequenceLocator(self, "login")
+                raise AssertionError(f"未预期的选择器：{selector}")
+
+            def bring_to_front(self):
+                pass
+
+            def evaluate(self, _expression):
+                pass
+
+            def wait_for_timeout(self, milliseconds):
+                import time
+
+                time.sleep(milliseconds / 1000)
+
+        page = SequencePage()
+        status = auth_module.login_status(
+            SimpleNamespace(pages=[page]),
+            page,
+            timeout_seconds=3.5,
+        )
+
+        self.assertTrue(status["logged_in"])
+        self.assertFalse(status["login_visible"])
+
+    def test_login_keep_open_eof_is_a_normal_close(self):
+        cli_module = load_module(
+            "ctrip_cli_keep_open_eof",
+            "ctrip_cli.py",
+        )
+
+        class FakeSession:
+            profile_dir = Path("/tmp/ctrip-profile")
+            browser = object()
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def focus(self, page=None):
+                return page or "page"
+
+        args = SimpleNamespace(
+            profile_dir=Path("/tmp/ctrip-profile"),
+            page_index=0,
+            page_url_contains="",
+            timeout=10,
+            session_probe_seconds=1,
+            keep_open=True,
+        )
+        with (
+            patch.object(cli_module, "CtripBrowserSession", FakeSession),
+            patch.object(cli_module, "ensure_login", return_value="page"),
+            patch.object(
+                cli_module,
+                "login_status",
+                return_value={"logged_in": True},
+            ),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            result = cli_module.run_login(args)
+
+        self.assertEqual(result, 0)
 
 if __name__ == "__main__":
     unittest.main()
