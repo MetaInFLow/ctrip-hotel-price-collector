@@ -128,11 +128,6 @@ def build_parser() -> argparse.ArgumentParser:
     collect = subparsers.add_parser("collect", help="按 JSON 配置执行完整批量采集")
     collect.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     collect.add_argument("--login-only", action="store_true")
-    collect.add_argument(
-        "--max-parallel-instances",
-        type=int,
-        help="覆盖配置中的并行 CloakBrowser 实例数，默认 1",
-    )
 
     for command_parser in (login, status, search, price, collect):
         _add_session_options(command_parser, suppress_defaults=True)
@@ -145,12 +140,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--page-index 必须是大于等于 0 的整数")
     if args.command == "search" and args.select_index is not None and args.select_index < 1:
         raise SystemExit("--select-index 必须从 1 开始")
-    if (
-        args.command == "collect"
-        and args.max_parallel_instances is not None
-        and args.max_parallel_instances < 1
-    ):
-        raise SystemExit("--max-parallel-instances 必须是大于等于 1 的整数")
     if args.command != "price":
         return
     if not args.hotel and not args.detail_url:
@@ -360,13 +349,6 @@ def run_collect(args: argparse.Namespace) -> int:
         print(f"配置错误：{exc}", file=sys.stderr)
         return 1
     config["profile_dir"] = str(args.profile_dir.expanduser().resolve())
-    if args.max_parallel_instances is not None:
-        config["max_parallel_instances"] = args.max_parallel_instances
-        try:
-            validate_price_config(config)
-        except ValueError as exc:
-            print(f"配置错误：{exc}", file=sys.stderr)
-            return 1
     return collect_prices(
         config,
         config_dir=config_path.parent,

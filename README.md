@@ -7,7 +7,7 @@
 ## 使用
 
 1. macOS/Linux 执行 `python3 /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.py`；Windows PowerShell 执行 `py C:\绝对路径\ctrip-hotel-price-collector\scripts\bootstrap_ctrip_hotel_skill.py`，部署 Python、CloakBrowser 与 openpyxl 依赖。
-2. 编辑 `/绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json`，配置酒店列表、城市、起始日期和采集天数。默认 `price_mode` 为 `response`；页面模式需要额外配置页面 XPath。多个酒店可将 `max_parallel_instances` 设置为 `2` 或更高，默认值为 `1`。
+2. 编辑 `/绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json`，配置酒店列表、城市、起始日期和采集天数。默认 `price_mode` 为 `response`；页面模式需要额外配置页面 XPath。多个酒店会在同一个浏览器实例内按配置顺序依次采集。
 3. 首次执行 `/绝对路径/ctrip-hotel-price-collector/.venv/bin/python /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py --login-only`，在可见浏览器中手动登录携程；Windows 将解释器替换为 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Scripts\python.exe`。
 4. 使用同一绝对解释器执行采集脚本，并传入绝对配置路径。批量采集默认在完成后关闭浏览器；需要保留窗口观察时，在单实例配置中显式设置 `keep_browser_open` 为 `true`。
 
@@ -29,15 +29,6 @@ Excel 由 Python `openpyxl` 生成，不需要 Node.js。
 
 所有原子操作都经过 `scripts/ctrip_login_guard.py` 的代码门禁。登录状态必须同时满足“我的订单”可见和“登录”不可见，并在稳定窗口内保持；导航后的瞬态登录标识会被轮询穿过，默认最多探测 15 秒。`login-status` 可单独执行此检查。搜索、候选选择、详情解析、接口响应取价和页面 XPath 取价都会在继续前验证登录状态，价格底层函数强制接收浏览器上下文。登录会话保存后，命令默认正常关闭浏览器；无交互终端中的 EOF 也按正常关闭处理。
 
-未命中详情页缓存的酒店会先由主会话顺序搜索并缓存。并行采集会在主会话完成登录校验后关闭主浏览器，复制出每个 worker 的独立 Profile；每个 worker 会重新检查登录状态，结果先写入分片，主进程再合并 JSON、索引并生成 Excel。worker 退出后临时 Profile 自动清理，主 Profile 和本地 Cookie 保留。
-
-直接运行多实例采集：
-
-```bash
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
-  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py \
-  --config /绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json \
-  --max-parallel-instances 2
-```
+未命中详情页缓存的酒店会在当前会话中顺序搜索并缓存；命中缓存的酒店直接复用详情页地址。采集按酒店、按日期依次执行，每个日期完成后立即落盘，浏览器会在任务结束时关闭，主 Profile 和本地 Cookie 保留。
 
 完整流程与约束见 [SKILL.md](SKILL.md)。

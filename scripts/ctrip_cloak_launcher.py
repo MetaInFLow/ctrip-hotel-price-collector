@@ -18,6 +18,7 @@ from urllib.request import urlopen
 MACOS_CDP_TIMEOUT_SECONDS = 30.0
 MACOS_CDP_CONNECT_TIMEOUT_MS = 15_000
 PROCESS_CLEANUP_TIMEOUT_SECONDS = 3.0
+MACOS_CDP_HOST = "localhost"
 
 
 def _set_argument(arguments: list[str], key: str, value: str) -> list[str]:
@@ -74,7 +75,10 @@ def _free_local_port() -> int:
 
 def _cdp_version(port: int) -> dict[str, Any] | None:
     try:
-        with urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
+        with urlopen(
+            f"http://{MACOS_CDP_HOST}:{port}/json/version",
+            timeout=1,
+        ) as response:
             payload = json.load(response)
     except (OSError, ValueError):
         return None
@@ -327,7 +331,7 @@ def _launch_macos(
         _wait_for_cdp(port, MACOS_CDP_TIMEOUT_SECONDS)
         playwright = sync_playwright().start()
         browser = playwright.chromium.connect_over_cdp(
-            f"http://127.0.0.1:{port}",
+            f"http://{MACOS_CDP_HOST}:{port}",
             timeout=MACOS_CDP_CONNECT_TIMEOUT_MS,
         )
         contexts = browser.contexts

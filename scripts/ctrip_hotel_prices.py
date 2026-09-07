@@ -5,16 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import multiprocessing
 import os
 import random
 import re
-import shutil
 import subprocess
 import sys
 import time
-import uuid
-from concurrent.futures import ProcessPoolExecutor
 from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -37,7 +33,6 @@ from ctrip_login_guard import (  # noqa: E402
     find_logged_in_page,
     require_logged_in,
     wait_for_login,
-    wait_for_stable_login_status,
 )
 from ctrip_page import close_other_pages, focus_page  # noqa: E402
 
@@ -47,16 +42,6 @@ SESSION_APP_NAME = "ctrip-hotel-price-collector"
 DEFAULT_PROFILE_NAME = ".cloakbrowser-profile"
 DEFAULT_DETAIL_CACHE_NAME = ".ctrip-hotel-detail-cache.json"
 ROOM_LIST_API_PATH = "/restapi/soa2/33278/getHotelRoomListInland"
-DEFAULT_MAX_PARALLEL_INSTANCES = 1
-PARALLEL_RUNS_DIR_NAME = ".ctrip-parallel-runs"
-PROFILE_RUNTIME_ENTRY_NAMES = frozenset(
-    {
-        "DevToolsActivePort",
-        "BrowserMetrics",
-        "LOCK",
-        "lockfile",
-    }
-)
 HOTEL_SEARCH_INPUT_XPATH = "xpath=//input[@id='_allSearchKeyword']"
 HOTEL_SEARCH_BUTTON_XPATH = "xpath=//*[@id='search_button_global']"
 HOTEL_CANDIDATE_XPATH = "xpath=//*[@class='search_list_hotel']"
@@ -135,15 +120,6 @@ def normalize_xpath_selector(
 
 
 def validate_price_config(config: dict[str, Any]) -> None:
-    try:
-        max_parallel_instances = int(
-            config.get("max_parallel_instances", DEFAULT_MAX_PARALLEL_INSTANCES)
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError("max_parallel_instances 必须是大于等于 1 的整数") from exc
-    if max_parallel_instances < 1:
-        raise ValueError("max_parallel_instances 必须是大于等于 1 的整数")
-    config["max_parallel_instances"] = max_parallel_instances
     config["price_mode"] = normalize_price_mode(config.get("price_mode", "response"))
     config["show_all_rooms_xpath"] = normalize_xpath_selector(
         config.get("show_all_rooms_xpath", DEFAULT_SHOW_ALL_ROOMS_XPATH),
@@ -273,139 +249,6 @@ def sleep_random_interval(
 def safe_filename(value: str) -> str:
     cleaned = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", value, flags=re.UNICODE)
     return cleaned.strip("._") or "hotel"
-
-
-def split_hotels_for_workers(
-    hotels: list[dict[str, Any]],
-    max_parallel_instances: int,
-) -> list[list[dict[str, Any]]]:
-    """Partition hotels deterministically across at most N worker instances."""
-
-    try:
-        worker_count = int(max_parallel_instances)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("max_parallel_instances 必须是大于等于 1 的整数") from exc
-    if worker_count < 1:
-        raise ValueError("max_parallel_instances 必须是大于等于 1 的整数")
-    if not hotels:
-        return []
-
-    worker_count = min(worker_count, len(hotels))
-    groups: list[list[dict[str, Any]]] = [[] for _ in range(worker_count)]
-    for index, hotel in enumerate(hotels):
-        groups[index % worker_count].append(dict(hotel))
-    return groups
-
-
-def build_parallel_run_dir(
-    profile_dir: Path | str,
-    *,
-    run_id: str | None = None,
-) -> Path:
-    """Return an isolated, absolute workspace for one parallel collection run."""
-
-    profile_path = require_absolute_path(profile_dir, "profile_dir")
-    run_token = str(run_id or "").strip()
-    if not run_token:
-        run_token = (
-            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            + f"-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-        )
-    return profile_path.parent / PARALLEL_RUNS_DIR_NAME / run_token
-
-
-def _ignore_profile_runtime_entries(_directory: str, names: list[str]) -> list[str]:
-    ignored: list[str] = []
-    for name in names:
-        lowered = name.lower()
-        if (
-            name.startswith("Singleton")
-            or name in PROFILE_RUNTIME_ENTRY_NAMES
-            or lowered.endswith(".lock")
-        ):
-            ignored.append(name)
-    return ignored
-
-
-def copy_profile_for_worker(
-    source_profile: Path | str,
-    destination_profile: Path | str,
-) -> Path:
-    """Clone a closed Chromium Profile while excluding process lock artifacts."""
-
-    source = require_absolute_path(source_profile, "source_profile")
-    destination = require_absolute_path(destination_profile, "destination_profile")
-    if not source.is_dir():
-        raise FileNotFoundError(f"找不到可复制的 Profile 目录：{source}")
-    if source == destination:
-        raise ValueError("source_profile 和 destination_profile 不能相同")
-    if destination.exists():
-        raise FileExistsError(f"worker Profile 目录已存在：{destination}")
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.copytree(
-            source,
-            destination,
-            ignore=_ignore_profile_runtime_entries,
-            symlinks=False,
-            ignore_dangling_symlinks=True,
-        )
-    except Exception:
-        shutil.rmtree(destination, ignore_errors=True)
-        raise
-    return destination
-
-
-def merge_worker_results(
-    worker_output_dirs: list[Path | str],
-    output_dir: Path | str,
-) -> list[dict[str, Any]]:
-    """Copy worker JSON shards into the final directory and rewrite file paths."""
-
-    destination_root = require_absolute_path(output_dir, "output_dir").resolve()
-    destination_root.mkdir(parents=True, exist_ok=True)
-    merged_items: list[dict[str, Any]] = []
-
-    for worker_output_dir in worker_output_dirs:
-        source_root = require_absolute_path(worker_output_dir, "worker_output_dir").resolve()
-        if not source_root.is_dir():
-            continue
-
-        index_path = source_root / "index.json"
-        if index_path.is_file():
-            index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-            index_items = index_payload.get("items", [])
-            if isinstance(index_items, list):
-                for item in index_items:
-                    if not isinstance(item, dict):
-                        continue
-                    rewritten = dict(item)
-                    item_file = str(rewritten.get("file") or "").strip()
-                    if item_file:
-                        item_path = Path(item_file).expanduser()
-                        if item_path.is_absolute():
-                            try:
-                                relative_path = item_path.resolve().relative_to(source_root)
-                            except ValueError:
-                                relative_path = None
-                        else:
-                            relative_path = item_path
-                        if relative_path is not None:
-                            rewritten["file"] = str(
-                                destination_root / relative_path
-                            )
-                    merged_items.append(rewritten)
-
-        for source_file in sorted(source_root.rglob("*.json")):
-            if source_file.name == "index.json":
-                continue
-            relative_path = source_file.relative_to(source_root)
-            destination_file = destination_root / relative_path
-            destination_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_file, destination_file)
-
-    return merged_items
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -1633,529 +1476,6 @@ def export_excel(input_dir: Path, output_path: Path) -> bool:
     return True
 
 
-def _collect_hotels_with_browser(
-    *,
-    browser: Any,
-    page: Any,
-    hotels: list[dict[str, Any]],
-    config: dict[str, Any],
-    detail_url_cache: dict[str, dict[str, Any]],
-    detail_url_cache_path: Path | None,
-    output_dir: Path,
-    summary: list[dict[str, Any]],
-    checkpoint: Any,
-    log_prefix: str = "",
-) -> Any:
-    """Collect a disjoint hotel slice with one browser and one Profile."""
-
-    price_mode = config["price_mode"]
-    stays = build_stays(config)
-    operation_started = False
-
-    def wait_between_operations(label: str) -> None:
-        nonlocal operation_started
-        if operation_started:
-            delay = sleep_random_interval(
-                config["random_sleep_min_seconds"],
-                config["random_sleep_max_seconds"],
-            )
-            print(
-                f"{log_prefix}{label}前随机等待 {delay:.2f} 秒。",
-                flush=True,
-            )
-        operation_started = True
-
-    for hotel in hotels:
-        hotel_name = str(hotel["name"]).strip()
-        print(f"\n{log_prefix}开始处理：{hotel_name}", flush=True)
-        wait_between_operations(f"处理酒店 {hotel_name}")
-        city_id = hotel.get("city_id", config.get("city_id"))
-        detail_page, detail_url, detail_source = resolve_hotel_detail(
-            browser=browser,
-            page=page,
-            hotel=hotel,
-            config=config,
-            detail_url_cache=detail_url_cache,
-            timeout_seconds=float(config["search_timeout_seconds"]),
-        )
-        page = detail_page
-        close_other_pages(browser, page)
-        page = focus_page(page)
-        if detail_source == "configured":
-            print(f"{log_prefix}使用配置中的详情页：{detail_url}", flush=True)
-        if detail_url_cache_path is not None:
-            save_detail_url_cache(detail_url_cache_path, detail_url_cache)
-        checkpoint("running")
-
-        for check_in, check_out in stays:
-            wait_between_operations(f"抓取日期 {check_in.isoformat()}")
-            target_url = build_detail_url(
-                detail_url,
-                check_in,
-                check_out,
-                adults=int(config["adults"]),
-                children=int(config["children"]),
-                rooms=int(config["rooms"]),
-                city_id=city_id,
-            )
-            file_path = (
-                output_dir
-                / safe_filename(hotel_name)
-                / f"{check_in.isoformat()}_{check_out.isoformat()}.json"
-            )
-            print(
-                f"{log_prefix}抓取 {check_in.isoformat()} 至 "
-                f"{check_out.isoformat()}...",
-                flush=True,
-            )
-            try:
-                collection = capture_room_data(
-                    detail_page,
-                    target_url,
-                    browser=browser,
-                    api_timeout_seconds=float(config["api_timeout_seconds"]),
-                    settle_ms=int(config["settle_ms"]),
-                    price_mode=price_mode,
-                    show_all_rooms_xpath=config["show_all_rooms_xpath"],
-                    page_price_xpath=config.get("page_price_xpath", ""),
-                    page_room_name_xpath=config.get("page_room_name_xpath", ""),
-                    page_price_sample_size=int(config["page_price_sample_size"]),
-                    page_price_timeout_seconds=float(
-                        config["page_price_timeout_seconds"]
-                    ),
-                )
-                responses = collection["responses"]
-                page_price_rows = collection["page_price_rows"]
-                captured_at = datetime.now(timezone.utc).isoformat()
-                response_room_rows = flatten_room_rows(
-                    hotel_name=hotel_name,
-                    check_in=check_in.isoformat(),
-                    check_out=check_out.isoformat(),
-                    detail_url=target_url,
-                    captured_at=captured_at,
-                    source_file=str(file_path),
-                    responses=responses,
-                )
-                page_price_checks = build_page_price_checks(
-                    response_room_rows,
-                    page_price_rows,
-                    sample_size=int(config["page_price_sample_size"]),
-                )
-                page_price_error = collection["page_price_error"]
-                check_status = page_price_check_status(
-                    page_price_rows=page_price_rows,
-                    checks=page_price_checks,
-                    error=page_price_error,
-                )
-                if page_price_error:
-                    print(
-                        f"{log_prefix}页面价格抽查失败，继续使用接口价格："
-                        f"{page_price_error}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                elif any(
-                    check.get("结果") == "mismatch"
-                    for check in page_price_checks
-                ):
-                    print(
-                        f"{log_prefix}页面价格与接口价格存在差异，已写入 JSON "
-                        "核验记录；当前仍按配置使用接口价格。",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                if price_mode == "page_xpath":
-                    room_rows = build_page_room_rows(
-                        hotel_name=hotel_name,
-                        check_in=check_in.isoformat(),
-                        check_out=check_out.isoformat(),
-                        detail_url=target_url,
-                        captured_at=captured_at,
-                        source_file=str(file_path),
-                        response_rows=response_room_rows,
-                        page_price_rows=page_price_rows,
-                    )
-                else:
-                    room_rows = annotate_response_room_rows(
-                        response_room_rows,
-                        page_price_rows,
-                    )
-                payload = {
-                    "hotel_name": hotel_name,
-                    "check_in": check_in.isoformat(),
-                    "check_out": check_out.isoformat(),
-                    "detail_url": target_url,
-                    "price_mode": price_mode,
-                    "captured_at": captured_at,
-                    "responses": responses,
-                    "page_price_rows": page_price_rows,
-                    "page_price_checks": page_price_checks,
-                    "page_price_check_status": check_status,
-                    "room_rows": room_rows,
-                }
-                if page_price_error:
-                    payload["page_price_check_error"] = page_price_error
-                write_json(file_path, payload)
-                summary.append(
-                    {
-                        "hotel_name": hotel_name,
-                        "check_in": check_in.isoformat(),
-                        "check_out": check_out.isoformat(),
-                        "status": "ok",
-                        "price_mode": price_mode,
-                        "response_count": len(responses),
-                        "room_row_count": len(room_rows),
-                        "page_price_check_status": check_status,
-                        "page_price_check_count": len(page_price_checks),
-                        "page_price_mismatch_count": sum(
-                            check.get("结果") == "mismatch"
-                            for check in page_price_checks
-                        ),
-                        "detail_url": target_url,
-                        "file": str(file_path),
-                    }
-                )
-                print(f"{log_prefix}已保存：{file_path}", flush=True)
-                checkpoint("running")
-            except Exception as exc:
-                error_payload = {
-                    "hotel_name": hotel_name,
-                    "check_in": check_in.isoformat(),
-                    "check_out": check_out.isoformat(),
-                    "detail_url": target_url,
-                    "price_mode": price_mode,
-                    "status": "error",
-                    "error": str(exc),
-                }
-                error_path = file_path.with_suffix(".error.json")
-                write_json(error_path, error_payload)
-                summary.append(
-                    {
-                        "hotel_name": hotel_name,
-                        "check_in": check_in.isoformat(),
-                        "check_out": check_out.isoformat(),
-                        "status": "error",
-                        "price_mode": price_mode,
-                        "room_row_count": 0,
-                        "page_price_check_status": "failed",
-                        "error": str(exc),
-                        "file": str(error_path),
-                    }
-                )
-                print(
-                    f"{log_prefix}本日期失败，已记录：{error_path}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                checkpoint("running")
-
-    return page
-
-
-def _resolve_hotel_details(
-    *,
-    browser: Any,
-    page: Any,
-    hotels: list[dict[str, Any]],
-    config: dict[str, Any],
-    detail_url_cache: dict[str, dict[str, Any]],
-    detail_url_cache_path: Path,
-    checkpoint: Any,
-) -> tuple[Any, list[dict[str, Any]]]:
-    """Resolve configured/cache/search URLs before any parallel workers start."""
-
-    operation_started = False
-    resolved_hotels: list[dict[str, Any]] = []
-    for hotel in hotels:
-        hotel_name = str(hotel["name"]).strip()
-        if operation_started:
-            delay = sleep_random_interval(
-                config["random_sleep_min_seconds"],
-                config["random_sleep_max_seconds"],
-            )
-            print(f"解析酒店前随机等待 {delay:.2f} 秒。", flush=True)
-        operation_started = True
-        detail_page, detail_url, _detail_source = resolve_hotel_detail(
-            browser=browser,
-            page=page,
-            hotel=hotel,
-            config=config,
-            detail_url_cache=detail_url_cache,
-            timeout_seconds=float(config["search_timeout_seconds"]),
-        )
-        page = detail_page
-        close_other_pages(browser, page)
-        page = focus_page(page)
-        resolved_hotel = dict(hotel)
-        resolved_hotel["detail_url"] = detail_url
-        resolved_hotels.append(resolved_hotel)
-        save_detail_url_cache(detail_url_cache_path, detail_url_cache)
-        checkpoint("running")
-        print(f"已解析酒店详情页：{hotel_name} -> {detail_url}", flush=True)
-    return page, resolved_hotels
-
-
-def _run_parallel_worker(payload: dict[str, Any]) -> dict[str, Any]:
-    """Run one isolated browser worker; never prompt for a second login."""
-
-    worker_index = int(payload["worker_index"])
-    prefix = f"[worker-{worker_index}] "
-    config = dict(payload["config"])
-    hotels = [dict(hotel) for hotel in payload["hotels"]]
-    output_dir = Path(payload["output_dir"]).expanduser().resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    summary: list[dict[str, Any]] = []
-    index_path = output_dir / "index.json"
-    browser = None
-
-    def checkpoint(status: str, error: str | None = None) -> None:
-        try:
-            write_run_index(index_path, summary, status=status, error=error)
-        except Exception as exc:
-            print(f"{prefix}采集进度无法保存：{exc}", file=sys.stderr)
-
-    try:
-        from ctrip_cloak_launcher import launch_persistent_context
-
-        profile_dir = Path(payload["profile_dir"]).expanduser().resolve()
-        print(f"{prefix}启动独立 CloakBrowser：{profile_dir}", flush=True)
-        browser = launch_persistent_context(str(profile_dir), headless=False)
-        cookie_count = count_ctrip_cookies(browser)
-        print(f"{prefix}已加载携程 Cookie 数量：{cookie_count}，正在校验。", flush=True)
-        pages = list(getattr(browser, "pages", []))
-        page = pages[0] if pages else browser.new_page()
-        page = focus_page(page)
-        page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
-        status = wait_for_stable_login_status(
-            browser,
-            page,
-            float(config["session_probe_seconds"]),
-        )
-        if not status["logged_in"]:
-            raise LoginRequiredError(
-                f"{prefix}独立 Profile 未通过登录状态校验，已停止该 worker。"
-            )
-        page = require_logged_in(browser, page, operation=f"{prefix}酒店价格采集")
-        close_other_pages(browser, page)
-        checkpoint("running")
-        _collect_hotels_with_browser(
-            browser=browser,
-            page=page,
-            hotels=hotels,
-            config=config,
-            detail_url_cache={},
-            detail_url_cache_path=None,
-            output_dir=output_dir,
-            summary=summary,
-            checkpoint=checkpoint,
-            log_prefix=prefix,
-        )
-        checkpoint("ready_for_export")
-        return {
-            "worker_index": worker_index,
-            "ok": True,
-            "error": None,
-            "hotels": hotels,
-            "output_dir": str(output_dir),
-            "summary": summary,
-        }
-    except Exception as exc:
-        checkpoint("failed", str(exc))
-        print(f"{prefix}执行失败：{exc}", file=sys.stderr, flush=True)
-        return {
-            "worker_index": worker_index,
-            "ok": False,
-            "error": str(exc),
-            "hotels": hotels,
-            "output_dir": str(output_dir),
-            "summary": summary,
-        }
-    finally:
-        if browser is not None:
-            close_browser_safely(browser)
-
-
-def run_parallel_workers(
-    payloads: list[dict[str, Any]],
-    *,
-    worker_fn: Any = _run_parallel_worker,
-    executor_factory: Any | None = None,
-) -> list[dict[str, Any]]:
-    """Run worker processes with spawn semantics on macOS and Windows."""
-
-    if not payloads:
-        return []
-    if executor_factory is None:
-        context = multiprocessing.get_context("spawn")
-
-        def executor_factory(max_workers: int) -> Any:
-            return ProcessPoolExecutor(
-                max_workers=max_workers,
-                mp_context=context,
-            )
-
-    results: list[dict[str, Any]] = []
-    with executor_factory(len(payloads)) as executor:
-        futures = [executor.submit(worker_fn, payload) for payload in payloads]
-        for payload, future in zip(payloads, futures):
-            try:
-                result = future.result()
-            except Exception as exc:
-                result = {
-                    "worker_index": payload["worker_index"],
-                    "ok": False,
-                    "error": str(exc),
-                    "hotels": payload["hotels"],
-                    "output_dir": payload["output_dir"],
-                    "summary": [],
-                }
-            results.append(result)
-    return results
-
-
-def _worker_failure_items(
-    result: dict[str, Any],
-    *,
-    config: dict[str, Any],
-    existing_keys: set[tuple[str, str, str]],
-) -> list[dict[str, Any]]:
-    error = str(result.get("error") or "并行 worker 执行失败")
-    worker_index = result.get("worker_index")
-    failure_items: list[dict[str, Any]] = []
-    for hotel in result.get("hotels", []):
-        hotel_name = str(hotel.get("name", "")).strip()
-        detail_url = str(hotel.get("detail_url", "")).strip()
-        city_id = hotel.get("city_id", config.get("city_id"))
-        for check_in, check_out in build_stays(config):
-            key = (hotel_name, check_in.isoformat(), check_out.isoformat())
-            if key in existing_keys:
-                continue
-            existing_keys.add(key)
-            target_url = detail_url
-            if detail_url:
-                try:
-                    target_url = build_detail_url(
-                        detail_url,
-                        check_in,
-                        check_out,
-                        adults=int(config["adults"]),
-                        children=int(config["children"]),
-                        rooms=int(config["rooms"]),
-                        city_id=city_id,
-                    )
-                except Exception:
-                    target_url = detail_url
-            failure_items.append(
-                {
-                    "hotel_name": hotel_name,
-                    "check_in": check_in.isoformat(),
-                    "check_out": check_out.isoformat(),
-                    "status": "error",
-                    "price_mode": config["price_mode"],
-                    "room_row_count": 0,
-                    "page_price_check_status": "failed",
-                    "error": error,
-                    "detail_url": target_url,
-                    "file": "",
-                    "worker_index": worker_index,
-                }
-            )
-    return failure_items
-
-
-def collect_parallel_hotels(
-    *,
-    config: dict[str, Any],
-    profile_dir: Path,
-    hotels: list[dict[str, Any]],
-    output_dir: Path,
-    run_root: Path,
-) -> list[dict[str, Any]]:
-    """Clone the logged-in Profile, run workers, and merge their JSON shards."""
-
-    groups = split_hotels_for_workers(hotels, config["max_parallel_instances"])
-    run_root.mkdir(parents=True, exist_ok=True)
-    payloads: list[dict[str, Any]] = []
-    for worker_index, group in enumerate(groups, start=1):
-        worker_root = run_root / f"worker-{worker_index}"
-        worker_profile = worker_root / "profile"
-        worker_output = worker_root / "results"
-        copy_profile_for_worker(profile_dir, worker_profile)
-        worker_config = dict(config)
-        worker_config["hotels"] = group
-        worker_config["profile_dir"] = str(worker_profile)
-        worker_config["output_dir"] = str(worker_output)
-        payloads.append(
-            {
-                "worker_index": worker_index,
-                "profile_dir": str(worker_profile),
-                "output_dir": str(worker_output),
-                "hotels": group,
-                "config": worker_config,
-            }
-        )
-        print(
-            f"已准备 worker-{worker_index}：{len(group)} 家酒店，"
-            f"独立 Profile={worker_profile}",
-            flush=True,
-        )
-
-    results = run_parallel_workers(payloads)
-    worker_output_dirs = [Path(payload["output_dir"]) for payload in payloads]
-    summary = merge_worker_results(worker_output_dirs, output_dir)
-    existing_keys = {
-        (
-            str(item.get("hotel_name", "")),
-            str(item.get("check_in", "")),
-            str(item.get("check_out", "")),
-        )
-        for item in summary
-    }
-    for result in results:
-        if not result.get("ok"):
-            summary.extend(
-                _worker_failure_items(
-                    result,
-                    config=config,
-                    existing_keys=existing_keys,
-                )
-            )
-        print(
-            f"worker-{result.get('worker_index')}"
-            f"{'完成' if result.get('ok') else '失败'}："
-            f"{len(result.get('summary', []))} 条日期记录。",
-            flush=True,
-        )
-    return summary
-
-
-def finalize_collection(
-    *,
-    output_dir: Path,
-    index_path: Path,
-    summary: list[dict[str, Any]],
-    checkpoint: Any,
-) -> int:
-    checkpoint("ready_for_export")
-    ok_count = sum(item["status"] == "ok" for item in summary)
-    print(f"\n处理完成：{ok_count}/{len(summary)} 个日期成功。", flush=True)
-    print(f"汇总文件：{index_path}", flush=True)
-    excel_path = output_dir / "ctrip_hotel_prices.xlsx"
-    excel_exported = export_excel(output_dir, excel_path)
-    if excel_exported:
-        print(f"Excel 文件：{excel_path}", flush=True)
-        checkpoint("completed")
-    else:
-        print("Excel 生成失败，原始 JSON 仍已保存。", file=sys.stderr)
-        checkpoint("failed", "Excel 生成失败")
-    return 0 if ok_count == len(summary) and excel_exported else 2
-
-
-def cleanup_parallel_run_dir(run_root: Path | None) -> None:
-    if run_root is not None:
-        shutil.rmtree(run_root, ignore_errors=True)
-
-
 def collect_prices(
     config: dict[str, Any],
     *,
@@ -2181,17 +1501,29 @@ def collect_prices(
     profile_dir = resolve_profile_dir(config, config_dir)
     detail_url_cache_path = resolve_detail_url_cache_path(config, config_dir)
     detail_url_cache = load_detail_url_cache(detail_url_cache_path)
+    price_mode = config["price_mode"]
     profile_exists = profile_dir.exists()
+    stays = build_stays(config)
     browser = None
-    parallel_run_root: Path | None = None
     summary: list[dict[str, Any]] = []
     index_path = output_dir / "index.json"
+    operation_started = False
 
     def checkpoint(status: str, error: str | None = None) -> None:
         try:
             write_run_index(index_path, summary, status=status, error=error)
         except Exception as exc:
             print(f"采集进度无法保存：{exc}", file=sys.stderr)
+
+    def wait_between_operations(label: str) -> None:
+        nonlocal operation_started
+        if operation_started:
+            delay = sleep_random_interval(
+                config["random_sleep_min_seconds"],
+                config["random_sleep_max_seconds"],
+            )
+            print(f"{label}前随机等待 {delay:.2f} 秒。", flush=True)
+        operation_started = True
 
     try:
         print("正在启动带本地会话的 CloakBrowser...", flush=True)
@@ -2227,68 +1559,200 @@ def collect_prices(
                     pass
             return 0
 
-        max_parallel_instances = min(
-            int(config["max_parallel_instances"]),
-            len(config["hotels"]),
-        )
-        if max_parallel_instances > 1:
-            print(
-                f"已启用多实例模式：{max_parallel_instances} 个独立 CloakBrowser。"
-                "主会话先完成搜店，随后关闭并复制 Profile。",
-                flush=True,
-            )
-            _page, resolved_hotels = _resolve_hotel_details(
+        for hotel in config["hotels"]:
+            hotel_name = str(hotel["name"]).strip()
+            print(f"\n开始处理：{hotel_name}", flush=True)
+            wait_between_operations(f"处理酒店 {hotel_name}")
+            city_id = hotel.get("city_id", config.get("city_id"))
+            detail_page, detail_url, detail_source = resolve_hotel_detail(
                 browser=browser,
                 page=page,
-                hotels=config["hotels"],
+                hotel=hotel,
                 config=config,
                 detail_url_cache=detail_url_cache,
-                detail_url_cache_path=detail_url_cache_path,
-                checkpoint=checkpoint,
+                timeout_seconds=float(config["search_timeout_seconds"]),
             )
-            close_browser_safely(browser)
-            browser = None
-            parallel_run_root = build_parallel_run_dir(profile_dir)
-            summary.extend(
-                collect_parallel_hotels(
-                    config=config,
-                    profile_dir=profile_dir,
-                    hotels=resolved_hotels,
-                    output_dir=output_dir,
-                    run_root=parallel_run_root,
+            page = detail_page
+            close_other_pages(browser, page)
+            page = focus_page(page)
+            if detail_source == "configured":
+                print(f"使用配置中的详情页：{detail_url}", flush=True)
+            save_detail_url_cache(detail_url_cache_path, detail_url_cache)
+            checkpoint("running")
+
+            for check_in, check_out in stays:
+                wait_between_operations(f"抓取日期 {check_in.isoformat()}")
+                target_url = build_detail_url(
+                    detail_url,
+                    check_in,
+                    check_out,
+                    adults=int(config["adults"]),
+                    children=int(config["children"]),
+                    rooms=int(config["rooms"]),
+                    city_id=city_id,
                 )
-            )
-            if config.get("keep_browser_open", False):
+                file_path = (
+                    output_dir
+                    / safe_filename(hotel_name)
+                    / f"{check_in.isoformat()}_{check_out.isoformat()}.json"
+                )
                 print(
-                    "多实例模式会在任务结束后自动关闭所有 worker 浏览器，"
-                    "keep_browser_open 已忽略。",
+                    f"抓取 {check_in.isoformat()} 至 {check_out.isoformat()}...",
                     flush=True,
                 )
-        else:
-            _collect_hotels_with_browser(
-                browser=browser,
-                page=page,
-                hotels=config["hotels"],
-                config=config,
-                detail_url_cache=detail_url_cache,
-                detail_url_cache_path=detail_url_cache_path,
-                output_dir=output_dir,
-                summary=summary,
-                checkpoint=checkpoint,
-            )
+                try:
+                    collection = capture_room_data(
+                        detail_page,
+                        target_url,
+                        browser=browser,
+                        api_timeout_seconds=float(config["api_timeout_seconds"]),
+                        settle_ms=int(config["settle_ms"]),
+                        price_mode=price_mode,
+                        show_all_rooms_xpath=config["show_all_rooms_xpath"],
+                        page_price_xpath=config.get("page_price_xpath", ""),
+                        page_room_name_xpath=config.get("page_room_name_xpath", ""),
+                        page_price_sample_size=int(config["page_price_sample_size"]),
+                        page_price_timeout_seconds=float(
+                            config["page_price_timeout_seconds"]
+                        ),
+                    )
+                    responses = collection["responses"]
+                    page_price_rows = collection["page_price_rows"]
+                    response_room_rows = flatten_room_rows(
+                        hotel_name=hotel_name,
+                        check_in=check_in.isoformat(),
+                        check_out=check_out.isoformat(),
+                        detail_url=target_url,
+                        captured_at=datetime.now(timezone.utc).isoformat(),
+                        source_file=str(file_path),
+                        responses=responses,
+                    )
+                    page_price_checks = build_page_price_checks(
+                        response_room_rows,
+                        page_price_rows,
+                        sample_size=int(config["page_price_sample_size"]),
+                    )
+                    page_price_error = collection["page_price_error"]
+                    check_status = page_price_check_status(
+                        page_price_rows=page_price_rows,
+                        checks=page_price_checks,
+                        error=page_price_error,
+                    )
+                    if page_price_error:
+                        print(
+                            f"页面价格抽查失败，继续使用接口价格：{page_price_error}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    elif any(
+                        check.get("结果") == "mismatch"
+                        for check in page_price_checks
+                    ):
+                        print(
+                            "页面价格与接口价格存在差异，已写入 JSON 核验记录；"
+                            "当前仍按配置使用接口价格。",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    if price_mode == "page_xpath":
+                        room_rows = build_page_room_rows(
+                            hotel_name=hotel_name,
+                            check_in=check_in.isoformat(),
+                            check_out=check_out.isoformat(),
+                            detail_url=target_url,
+                            captured_at=datetime.now(timezone.utc).isoformat(),
+                            source_file=str(file_path),
+                            response_rows=response_room_rows,
+                            page_price_rows=page_price_rows,
+                        )
+                    else:
+                        room_rows = annotate_response_room_rows(
+                            response_room_rows,
+                            page_price_rows,
+                        )
+                    payload = {
+                        "hotel_name": hotel_name,
+                        "check_in": check_in.isoformat(),
+                        "check_out": check_out.isoformat(),
+                        "detail_url": target_url,
+                        "price_mode": price_mode,
+                        "captured_at": datetime.now(timezone.utc).isoformat(),
+                        "responses": responses,
+                        "page_price_rows": page_price_rows,
+                        "page_price_checks": page_price_checks,
+                        "page_price_check_status": check_status,
+                        "room_rows": room_rows,
+                    }
+                    if page_price_error:
+                        payload["page_price_check_error"] = page_price_error
+                    write_json(file_path, payload)
+                    summary.append(
+                        {
+                            "hotel_name": hotel_name,
+                            "check_in": check_in.isoformat(),
+                            "check_out": check_out.isoformat(),
+                            "status": "ok",
+                            "price_mode": price_mode,
+                            "response_count": len(responses),
+                            "room_row_count": len(room_rows),
+                            "page_price_check_status": check_status,
+                            "page_price_check_count": len(page_price_checks),
+                            "page_price_mismatch_count": sum(
+                                check.get("结果") == "mismatch"
+                                for check in page_price_checks
+                            ),
+                            "detail_url": target_url,
+                            "file": str(file_path),
+                        }
+                    )
+                    print(f"已保存：{file_path}", flush=True)
+                    checkpoint("running")
+                except Exception as exc:
+                    error_payload = {
+                        "hotel_name": hotel_name,
+                        "check_in": check_in.isoformat(),
+                        "check_out": check_out.isoformat(),
+                        "detail_url": target_url,
+                        "price_mode": price_mode,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                    error_path = file_path.with_suffix(".error.json")
+                    write_json(error_path, error_payload)
+                    summary.append(
+                        {
+                            "hotel_name": hotel_name,
+                            "check_in": check_in.isoformat(),
+                            "check_out": check_out.isoformat(),
+                            "status": "error",
+                            "price_mode": price_mode,
+                            "room_row_count": 0,
+                            "page_price_check_status": "failed",
+                            "error": str(exc),
+                            "file": str(error_path),
+                        }
+                    )
+                    print(f"本日期失败，已记录：{error_path}", file=sys.stderr)
+                    checkpoint("running")
 
-        result = finalize_collection(
-            output_dir=output_dir,
-            index_path=index_path,
-            summary=summary,
-            checkpoint=checkpoint,
-        )
-        if config.get("keep_browser_open", False) and max_parallel_instances <= 1:
+        checkpoint("ready_for_export")
+        ok_count = sum(item["status"] == "ok" for item in summary)
+        print(f"\n处理完成：{ok_count}/{len(summary)} 个日期成功。", flush=True)
+        print(f"汇总文件：{index_path}", flush=True)
+        excel_path = output_dir / "ctrip_hotel_prices.xlsx"
+        excel_exported = export_excel(output_dir, excel_path)
+        if excel_exported:
+            print(f"Excel 文件：{excel_path}", flush=True)
+            checkpoint("completed")
+        else:
+            print("Excel 生成失败，原始 JSON 仍已保存。", file=sys.stderr)
+            checkpoint("failed", "Excel 生成失败")
+        if config.get("keep_browser_open", False):
             try:
                 input("浏览器仍保持打开。按 Enter 关闭：")
             except EOFError:
                 pass
-        return result
+        return 0 if ok_count == len(summary) and excel_exported else 2
     except Exception as exc:
         checkpoint("failed", str(exc))
         if summary:
@@ -2300,7 +1764,6 @@ def collect_prices(
     finally:
         if browser is not None:
             close_browser_safely(browser)
-        cleanup_parallel_run_dir(parallel_run_root)
 
 
 def parse_args() -> argparse.Namespace:
@@ -2338,11 +1801,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="接口模式页面抽查数量；设为 0 关闭抽查",
     )
-    parser.add_argument(
-        "--max-parallel-instances",
-        type=int,
-        help="覆盖配置中的并行 CloakBrowser 实例数，默认 1",
-    )
     return parser.parse_args()
 
 
@@ -2364,8 +1822,6 @@ def main() -> int:
         config["page_room_name_xpath"] = args.page_room_name_xpath
     if args.page_price_sample_size is not None:
         config["page_price_sample_size"] = args.page_price_sample_size
-    if args.max_parallel_instances is not None:
-        config["max_parallel_instances"] = args.max_parallel_instances
     try:
         validate_price_config(config)
     except ValueError as exc:

@@ -85,15 +85,15 @@ class CliModuleTests(unittest.TestCase):
         self.assertEqual(args.page_index, 2)
         self.assertEqual(args.page_url_contains, "hotels.ctrip.com")
 
-    def test_collect_command_accepts_parallel_instance_override(self):
-        cli_module = load_module("ctrip_cli_parallel_instances", "ctrip_cli.py")
+    def test_collect_command_has_no_parallel_instance_override(self):
+        cli_module = load_module("ctrip_cli_sequential_mode", "ctrip_cli.py")
         parser = cli_module.build_parser()
 
-        args = parser.parse_args(
-            ["collect", "--max-parallel-instances", "3"]
-        )
+        args = parser.parse_args(["collect"])
 
-        self.assertEqual(args.max_parallel_instances, 3)
+        self.assertFalse(hasattr(args, "max_parallel_instances"))
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["collect", "--max-parallel-instances", "2"])
 
     def test_price_command_requires_mode_specific_xpath(self):
         cli_module = load_module("ctrip_cli_price_validation", "ctrip_cli.py")
@@ -162,6 +162,34 @@ class CliModuleTests(unittest.TestCase):
         self.assertIn("--user-data-dir=/tmp/ctrip-profile", command)
         self.assertIn("--remote-debugging-port=19229", command)
         self.assertIn("--fingerprint=12345", command)
+
+    def test_macos_cdp_probe_uses_localhost(self):
+        launcher_module = load_module(
+            "ctrip_cloak_launcher_cdp_host",
+            "ctrip_cloak_launcher.py",
+        )
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return b'{"webSocketDebuggerUrl":"ws://localhost/devtools"}'
+
+        with patch.object(launcher_module, "urlopen", return_value=Response()) as open_mock:
+            result = launcher_module._cdp_version(19229)
+
+        self.assertEqual(
+            result["webSocketDebuggerUrl"],
+            "ws://localhost/devtools",
+        )
+        open_mock.assert_called_once_with(
+            "http://localhost:19229/json/version",
+            timeout=1,
+        )
 
     def test_macos_launcher_cleans_chromium_if_playwright_initialization_fails(self):
         launcher_module = load_module(
