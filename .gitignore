@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
 .cloakbrowser-profile/
+.ctrip-parallel-runs/
 .ctrip-hotel-detail-cache.json
 output/

@@ -20,6 +20,7 @@ CTRIP_SESSION_URLS = ["https://www.ctrip.com/", "https://hotels.ctrip.com/"]
 LOGIN_XPATH = "xpath=//span[normalize-space()='登录']"
 ORDERS_XPATH = "xpath=//*[normalize-space()='我的订单']"
 LOGIN_STATE_STABILITY_SECONDS = 1.5
+LOGIN_STATE_PROBE_TIMEOUT_SECONDS = 15.0
 
 
 class LoginRequiredError(RuntimeError):
@@ -149,6 +150,7 @@ def require_logged_in(
     operation: str = "携程操作",
     navigate_to_home: bool = False,
     home_url: str = HOME_URL,
+    probe_timeout_seconds: float = LOGIN_STATE_PROBE_TIMEOUT_SECONDS,
 ) -> Any:
     """Fail closed unless the operation's page has a verified login state.
 
@@ -158,11 +160,19 @@ def require_logged_in(
     """
 
     page = focus_page(page)
-    status = check_login(browser, page)
+    status = wait_for_stable_login_status(
+        browser,
+        page,
+        probe_timeout_seconds,
+    )
     if not status["logged_in"] and navigate_to_home:
         page.goto(home_url, wait_until="domcontentloaded", timeout=60_000)
         page = focus_page(page)
-        status = check_login(browser, page)
+        status = wait_for_stable_login_status(
+            browser,
+            page,
+            probe_timeout_seconds,
+        )
 
     if not status["logged_in"]:
         raise LoginRequiredError(

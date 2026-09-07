@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
+import signal
 import socket
 import subprocess
 import time
@@ -15,6 +17,7 @@ from urllib.request import urlopen
 
 MACOS_CDP_TIMEOUT_SECONDS = 30.0
 MACOS_CDP_CONNECT_TIMEOUT_MS = 15_000
+PROCESS_CLEANUP_TIMEOUT_SECONDS = 3.0
 
 
 def _set_argument(arguments: list[str], key: str, value: str) -> list[str]:
@@ -78,6 +81,114 @@ def _cdp_version(port: int) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _posix_instance_pids(profile_path: Path, cdp_port: int) -> set[int]:
+    """Find Chromium processes that belong to one isolated macOS/Linux run."""
+
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+
+    profile_marker = f"--user-data-dir={profile_path}"
+    port_marker = f"--remote-debugging-port={cdp_port}"
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2:
+            continue
+        pid_text, command = fields
+        if profile_marker not in command or port_marker not in command:
+            continue
+        try:
+            pids.add(int(pid_text))
+        except ValueError:
+            continue
+    return pids
+
+
+def _windows_instance_pids(cdp_port: int) -> set[int]:
+    """Find the Chromium process listening on one isolated Windows port."""
+
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+
+    port_suffix = f":{cdp_port}"
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 5 or fields[0].upper() != "TCP":
+            continue
+        if not fields[1].endswith(port_suffix):
+            continue
+        if fields[3].upper() != "LISTENING":
+            continue
+        try:
+            pids.add(int(fields[4]))
+        except ValueError:
+            continue
+    return pids
+
+
+def _instance_pids(profile_path: Path, cdp_port: int) -> set[int]:
+    if os.name == "nt":
+        return _windows_instance_pids(cdp_port)
+    return _posix_instance_pids(profile_path, cdp_port)
+
+
+def _cleanup_macos_process(profile_path: Path, cdp_port: int) -> None:
+    """Terminate the Chromium tree detached by macOS Launch Services."""
+
+    deadline = time.monotonic() + PROCESS_CLEANUP_TIMEOUT_SECONDS
+    pids = _instance_pids(profile_path, cdp_port)
+    if os.name == "nt":
+        for pid in pids:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return
+
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+
+    while pids and time.monotonic() < deadline:
+        time.sleep(0.1)
+        pids = _instance_pids(profile_path, cdp_port)
+
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+
+
 def _wait_for_cdp(port: int, timeout_seconds: float) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -94,10 +205,20 @@ def _wait_for_cdp(port: int, timeout_seconds: float) -> dict[str, Any]:
 class _ConnectedPersistentContext:
     """Expose a BrowserContext while owning the CDP browser connection."""
 
-    def __init__(self, browser: Any, context: Any, playwright: Any) -> None:
+    def __init__(
+        self,
+        browser: Any,
+        context: Any,
+        playwright: Any,
+        *,
+        profile_path: Path | None = None,
+        cdp_port: int | None = None,
+    ) -> None:
         self._browser = browser
         self._context = context
         self._playwright = playwright
+        self._profile_path = profile_path
+        self._cdp_port = cdp_port
         self._closed = False
 
     def __getattr__(self, name: str) -> Any:
@@ -117,7 +238,11 @@ class _ConnectedPersistentContext:
                 except Exception:
                     pass
         finally:
-            self._playwright.stop()
+            try:
+                self._playwright.stop()
+            finally:
+                if self._profile_path is not None and self._cdp_port is not None:
+                    _cleanup_macos_process(self._profile_path, self._cdp_port)
 
 
 def _build_cloak_args(
@@ -197,9 +322,10 @@ def _launch_macos(
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"无法通过 macOS Launch Services 启动 Chromium：{exc}") from exc
 
-    _wait_for_cdp(port, MACOS_CDP_TIMEOUT_SECONDS)
-    playwright = sync_playwright().start()
+    playwright = None
     try:
+        _wait_for_cdp(port, MACOS_CDP_TIMEOUT_SECONDS)
+        playwright = sync_playwright().start()
         browser = playwright.chromium.connect_over_cdp(
             f"http://127.0.0.1:{port}",
             timeout=MACOS_CDP_CONNECT_TIMEOUT_MS,
@@ -207,9 +333,20 @@ def _launch_macos(
         contexts = browser.contexts
         if not contexts:
             raise RuntimeError("Chromium 已启动，但没有可用的持久化 BrowserContext")
-        return _ConnectedPersistentContext(browser, contexts[0], playwright)
+        return _ConnectedPersistentContext(
+            browser,
+            contexts[0],
+            playwright,
+            profile_path=profile_path,
+            cdp_port=port,
+        )
     except Exception:
-        playwright.stop()
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except Exception:
+                pass
+        _cleanup_macos_process(profile_path, port)
         raise
 
 

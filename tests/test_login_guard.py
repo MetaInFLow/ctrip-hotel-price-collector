@@ -1,4 +1,5 @@
 import importlib.util
+import time
 import unittest
 from pathlib import Path
 
@@ -45,6 +46,9 @@ class Page:
     def evaluate(self, _expression):
         pass
 
+    def wait_for_timeout(self, _milliseconds):
+        pass
+
     def locator(self, selector):
         if selector == self.module.LOGIN_XPATH:
             return Locator(self.login_visible)
@@ -59,6 +63,55 @@ class Browser:
 
 
 class LoginGuardTests(unittest.TestCase):
+    def test_require_logged_in_waits_through_transient_login_marker(self):
+        module = load_guard_module()
+
+        class OrdersLocator:
+            def count(self):
+                return 1
+
+            def nth(self, _index):
+                return self
+
+            def is_visible(self):
+                return True
+
+        class LoginLocator(OrdersLocator):
+            def __init__(self, page):
+                self.page = page
+
+            def is_visible(self):
+                self.page.login_checks += 1
+                return self.page.login_checks <= 2
+
+        class TransientPage:
+            url = "https://hotels.ctrip.com/hotels/1.html"
+
+            def __init__(self):
+                self.login_checks = 0
+
+            def bring_to_front(self):
+                pass
+
+            def evaluate(self, _expression):
+                pass
+
+            def locator(self, selector):
+                if selector == module.LOGIN_XPATH:
+                    return LoginLocator(self)
+                if selector == module.ORDERS_XPATH:
+                    return OrdersLocator()
+                raise AssertionError(f"未预期的选择器：{selector}")
+
+            def wait_for_timeout(self, milliseconds):
+                time.sleep(milliseconds / 1000)
+
+        page = TransientPage()
+
+        result = module.require_logged_in(Browser(page), page, operation="房价采集")
+
+        self.assertIs(result, page)
+
     def test_public_orders_marker_with_login_trigger_is_not_authenticated(self):
         module = load_guard_module()
         page = Page(module, login_visible=True, orders_visible=True)

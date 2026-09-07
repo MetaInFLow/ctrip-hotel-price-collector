@@ -21,6 +21,7 @@
   "page_room_name_xpath": "",
   "page_price_sample_size": 3,
   "page_price_timeout_seconds": 15,
+  "max_parallel_instances": 1,
   "session_probe_seconds": 30,
   "random_sleep_min_seconds": 2,
   "random_sleep_max_seconds": 5,
