@@ -1,0 +1,26 @@
+{
+  "hotels": [
+    {
+      "name": "暮山映雪·私汤别院(峨眉山报国寺店)",
+      "detail_url": "https://hotels.ctrip.com/hotels/119084256.html?cityid=95"
+    },
+    {
+      "name": "峨眉山景区智选假日酒店"
+    }
+  ],
+  "city_id": 95,
+  "start_date": "2026-09-03",
+  "days": 3,
+  "nights": 1,
+  "adults": 2,
+  "children": 0,
+  "rooms": 1,
+  "session_probe_seconds": 15,
+  "random_sleep_min_seconds": 2,
+  "random_sleep_max_seconds": 5,
+  "login_timeout_seconds": 600,
+  "search_timeout_seconds": 45,
+  "api_timeout_seconds": 45,
+  "settle_ms": 1500,
+  "keep_browser_open": false
+}

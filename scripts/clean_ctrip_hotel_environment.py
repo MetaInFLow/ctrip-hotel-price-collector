@@ -23,8 +23,8 @@ def default_runtime_paths() -> list[Path]:
     """返回不同平台下该技能可能使用的运行状态目录。"""
     home = Path.home()
     paths = [
+        SKILL_DIR / ".runtime",
         SKILL_DIR / ".venv",
-        SKILL_DIR / "ctrip_hotel_config.json",
         SKILL_DIR / ".pytest_cache",
         SKILL_DIR / "__pycache__",
         SKILL_DIR / "scripts" / "__pycache__",

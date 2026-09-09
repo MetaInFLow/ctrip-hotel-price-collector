@@ -12,7 +12,9 @@ from pathlib import Path
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
-REQUIREMENTS_FILE = SKILL_DIR / "requirements-cloak.txt"
+REQUIREMENTS_FILE = SKILL_DIR / "requirements-cloak.lock"
+PREFLIGHT_SCRIPT = SKILL_DIR / "scripts" / "verify_ctrip_hotel_environment.py"
+CLOAK_CACHE_DIR = SKILL_DIR / ".runtime" / "cloakbrowser"
 
 
 def venv_python(venv_dir: Path, *, os_name: str | None = None) -> Path:
@@ -68,7 +70,7 @@ def main(argv=None) -> int:
         if not python_in_venv.is_file():
             raise RuntimeError(f"虚拟环境创建失败，找不到：{python_in_venv}")
 
-        print("安装 CloakBrowser 与 Excel 依赖", flush=True)
+        print("安装已锁定的 CloakBrowser 与 Excel 依赖", flush=True)
         run(
             [
                 str(python_in_venv),
@@ -76,6 +78,7 @@ def main(argv=None) -> int:
                 "pip",
                 "install",
                 "--disable-pip-version-check",
+                "--require-hashes",
                 "-r",
                 str(REQUIREMENTS_FILE),
             ]
@@ -83,8 +86,11 @@ def main(argv=None) -> int:
         run(
             [
                 str(python_in_venv),
-                "-c",
-                "import cloakbrowser, openpyxl; print('运行时检查通过', openpyxl.__version__)",
+                str(PREFLIGHT_SCRIPT),
+                "--skill-dir",
+                str(SKILL_DIR),
+                "--cache-dir",
+                str(CLOAK_CACHE_DIR),
             ]
         )
     except (FileNotFoundError, RuntimeError, subprocess.CalledProcessError) as exc:
@@ -92,7 +98,7 @@ def main(argv=None) -> int:
         return 1
 
     print("部署完成。", flush=True)
-    print(f"运行检查：{python_in_venv} {SKILL_DIR / 'scripts' / 'ctrip_hotel_prices.py'} --help")
+    print(f"运行采集：{python_in_venv} {SKILL_DIR / 'scripts' / 'ctrip_cli.py'} collect --config <绝对配置路径>")
     return 0
 
 

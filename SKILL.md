@@ -35,7 +35,7 @@ description: >-
 
 ## 运行环境
 
-首次部署由 `scripts/bootstrap_ctrip_hotel_skill.py` 或 `scripts/bootstrap_ctrip_hotel_skill.sh` 完成。脚本在技能包目录创建 `.venv`，安装 CloakBrowser 与 `openpyxl`；运行位置不会改变该默认路径。
+首次部署使用系统原生入口：macOS/Linux 运行 `scripts/bootstrap_ctrip_hotel_skill.sh`，Windows 运行 `scripts/bootstrap_ctrip_hotel_skill.cmd`。默认入口在技能包目录内准备受管 Python、`.venv`、已锁定依赖和 CloakBrowser 浏览器运行时，无需依赖系统 Python，也不会修改系统 Python 或系统环境变量。`scripts/bootstrap_ctrip_hotel_skill.py` 仅供已有 Python 的高级排查使用。
 
 本地持久化状态使用绝对路径保存，包括登录 Profile、详情页缓存和采集输出。Profile 只保存在当前设备，不提交、不共享、不上传。缓存按酒店名称与城市区分，减少重复解析详情页。
 

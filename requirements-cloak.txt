@@ -1,2 +1,2 @@
-cloakbrowser>=0.5.10
-openpyxl>=3.1.0
+cloakbrowser==0.5.10
+openpyxl==3.1.5

@@ -19,6 +19,21 @@ MACOS_CDP_TIMEOUT_SECONDS = 30.0
 MACOS_CDP_CONNECT_TIMEOUT_MS = 15_000
 PROCESS_CLEANUP_TIMEOUT_SECONDS = 3.0
 MACOS_CDP_HOST = "localhost"
+SKILL_DIR = Path(__file__).resolve().parents[1]
+
+
+def configure_cloakbrowser_cache() -> Path:
+    """Use the package-local browser cache unless an operator overrides it."""
+
+    configured = os.environ.get("CLOAKBROWSER_CACHE_DIR")
+    cache_dir = (
+        Path(configured).expanduser().resolve()
+        if configured
+        else SKILL_DIR / ".runtime" / "cloakbrowser"
+    )
+    os.environ["CLOAKBROWSER_CACHE_DIR"] = str(cache_dir)
+    os.environ.setdefault("CLOAKBROWSER_AUTO_UPDATE", "false")
+    return cache_dir
 
 
 def _set_argument(arguments: list[str], key: str, value: str) -> list[str]:
@@ -362,6 +377,8 @@ def launch_persistent_context(
 ) -> Any:
     """Launch CloakBrowser persistently, using Launch Services on macOS."""
 
+    configure_cloakbrowser_cache()
+
     if platform.system() != "Darwin":
         from cloakbrowser import launch_persistent_context as cloak_launch
 
@@ -398,4 +415,8 @@ def launch_persistent_context(
     )
 
 
-__all__ = ["build_macos_open_command", "launch_persistent_context"]
+__all__ = [
+    "build_macos_open_command",
+    "configure_cloakbrowser_cache",
+    "launch_persistent_context",
+]
