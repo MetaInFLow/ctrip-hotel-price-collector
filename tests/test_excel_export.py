@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
@@ -87,6 +88,24 @@ class ExcelExportTests(unittest.TestCase):
             )
             self.assertEqual(workbook["房型价格"].max_row, 2)
             workbook.close()
+
+    def test_collection_export_calls_the_builder_in_process(self):
+        scripts_root = PROJECT_ROOT / "scripts"
+        import sys
+
+        if str(scripts_root) not in sys.path:
+            sys.path.insert(0, str(scripts_root))
+        import ctrip_hotel_excel_builder
+        import ctrip_hotel_prices
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            output = root / "prices.xlsx"
+            with patch.object(ctrip_hotel_excel_builder, "build") as build_mock:
+                result = ctrip_hotel_prices.export_excel(root, output)
+
+        self.assertTrue(result)
+        build_mock.assert_called_once_with(root, output)
 
 
 if __name__ == "__main__":

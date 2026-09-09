@@ -9,19 +9,22 @@ import platform
 import signal
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from ctrip_runtime import bundled_browser_binary, cloakbrowser_cache_dir  # noqa: E402
 
 MACOS_CDP_TIMEOUT_SECONDS = 30.0
 MACOS_CDP_CONNECT_TIMEOUT_MS = 15_000
 PROCESS_CLEANUP_TIMEOUT_SECONDS = 3.0
 MACOS_CDP_HOST = "localhost"
-SKILL_DIR = Path(__file__).resolve().parents[1]
-
-
 def configure_cloakbrowser_cache() -> Path:
     """Use the package-local browser cache unless an operator overrides it."""
 
@@ -29,10 +32,13 @@ def configure_cloakbrowser_cache() -> Path:
     cache_dir = (
         Path(configured).expanduser().resolve()
         if configured
-        else SKILL_DIR / ".runtime" / "cloakbrowser"
+        else cloakbrowser_cache_dir()
     )
     os.environ["CLOAKBROWSER_CACHE_DIR"] = str(cache_dir)
     os.environ.setdefault("CLOAKBROWSER_AUTO_UPDATE", "false")
+    packaged_browser = bundled_browser_binary()
+    if packaged_browser is not None:
+        os.environ.setdefault("CLOAKBROWSER_BINARY_PATH", str(packaged_browser))
     return cache_dir
 
 

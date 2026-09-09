@@ -1,0 +1,14 @@
+FDE Ctrip Price Collector - Third-Party Notices
+
+The customer package contains the following runtime components:
+
+- CloakBrowser 0.5.10, MIT License
+- CloakBrowser patched Chromium binary; Chromium open-source notices are
+  available from chrome://credits in the bundled browser
+- Playwright for Python 1.62.0, Apache License 2.0
+- openpyxl 3.1.5, MIT License
+- socksio 1.0.0, MIT License
+
+The corresponding license texts are included in the licenses directory.
+The development build uses Nuitka 4.2.1 under its applicable open-source license;
+Nuitka is a build tool and is not shipped as a customer runtime component.

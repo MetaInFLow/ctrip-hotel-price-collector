@@ -8,7 +8,6 @@ import json
 import os
 import random
 import re
-import subprocess
 import sys
 import time
 from collections.abc import Mapping
@@ -23,7 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from ctrip_login_guard import (  # noqa: E402
+from ctrip_login_guard import (  # noqa: E402, F401 - compatibility exports
     CTRIP_SESSION_URLS,
     LOGIN_XPATH,
     ORDERS_XPATH,
@@ -36,6 +35,7 @@ from ctrip_login_guard import (  # noqa: E402
     require_logged_in,
     wait_for_login,
 )
+from ctrip_runtime import default_config_path  # noqa: E402
 from ctrip_page import close_other_pages, focus_page  # noqa: E402
 
 
@@ -62,7 +62,7 @@ PRICE_MODE_ALIASES = {
 PAGE_PRICE_PATTERN = re.compile(
     r"(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.])"
 )
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "ctrip_hotel_config.json"
+DEFAULT_CONFIG_PATH = default_config_path()
 
 
 def session_root_for_platform(
@@ -1614,32 +1614,12 @@ def close_browser_safely(browser: Any) -> None:
 
 
 def export_excel(input_dir: Path, output_path: Path) -> bool:
-    script_dir = Path(__file__).resolve().parent
-    py_builder = script_dir / "ctrip_hotel_excel_builder.py"
-    if not py_builder.is_file():
-        print(f"找不到 Python Excel 生成器：{py_builder}", file=sys.stderr)
-        return False
+    from ctrip_hotel_excel_builder import build
 
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(py_builder),
-            "--input-dir",
-            str(input_dir),
-            "--output",
-            str(output_path),
-        ],
-        cwd=str(script_dir),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.stdout.strip():
-        print(result.stdout.strip(), flush=True)
-    if result.returncode != 0:
-        if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
-        print("Python Excel 生成器执行失败，请确认已安装 requirements-cloak.txt。", file=sys.stderr)
+    try:
+        build(input_dir, output_path)
+    except Exception as exc:
+        print(f"Excel 生成失败：{exc}", file=sys.stderr)
         return False
     return True
 

@@ -10,15 +10,15 @@ description: >-
 
 ## 用途
 
-用于在用户自己的本地会话内，采集指定酒店与日期区间的房型价格并生成比价结果。输入来自 `ctrip_hotel_config.json` 或等价的用户配置；结果写入本机输出目录，包含原始 JSON、房型明细、采集汇总、接口概览和 `ctrip_hotel_prices.xlsx`。
+在用户自己的本地会话内，采集指定酒店与日期区间的房型价格并生成比价结果。输入来自 `ctrip_hotel_config.json` 或等价的用户配置；结果写入本机输出目录，包含原始 JSON、房型明细、采集汇总、接口概览和 `ctrip_hotel_prices.xlsx`。
 
-## 脚本运行契约
+## 运行契约
 
-- 唯一业务入口为 `scripts/ctrip_cli.py`；批量采集使用其 `collect` 能力。
-- 脚本负责搜索、登录状态检查、零价复核和登录提示。Skill 只读取脚本状态与结果，不编排页面行为。
-- 脚本在需要人工确认时启动可见窗口并等待用户完成登录；完成验证后才继续采集。
+- 唯一业务入口为技能包内的原生运行程序：macOS/Linux 使用 `bin/ctrip-agent`，Windows 使用 `bin/ctrip-agent.exe`。
+- 批量采集使用 `collect --config <绝对配置路径>`。登录、状态检查、搜索和单次取价分别使用 `login`、`login-status`、`search` 和 `price`。
+- 运行程序负责搜索、登录状态检查、零价复核和登录提示。Skill 只读取运行状态与结果，不编排页面行为。
+- 程序在需要人工确认时启动可见窗口并等待用户完成登录；完成验证后继续采集。
 - 所有可监控状态以 `CTRIP_EVENT {JSON}` 输出。事件只含状态、计数、页面地址和业务上下文，不输出 Cookie 值、账号或密码。
-- `scripts/ctrip_login_guard.py` 是登录门禁的唯一实现；采集、搜索和价格读取都受其约束。
 
 ## 监控事件
 
@@ -35,7 +35,7 @@ description: >-
 
 ## 运行环境
 
-首次部署使用系统原生入口：macOS/Linux 运行 `scripts/bootstrap_ctrip_hotel_skill.sh`，Windows 运行 `scripts/bootstrap_ctrip_hotel_skill.cmd`。默认入口在技能包目录内准备受管 Python、`.venv`、已锁定依赖和 CloakBrowser 浏览器运行时，无需依赖系统 Python，也不会修改系统 Python 或系统环境变量。`scripts/bootstrap_ctrip_hotel_skill.py` 仅供已有 Python 的高级排查使用。
+首次部署由用户运行技能包根目录的 `install.sh` 或 `install.cmd`。原生运行程序和 CloakBrowser 浏览器组件已随客户包交付，安装验证无需外部下载，无需依赖系统 Python，不修改系统 Python 或系统环境变量。如运行程序报告环境缺失，执行 `setup` 并将完整错误信息告知用户。
 
 本地持久化状态使用绝对路径保存，包括登录 Profile、详情页缓存和采集输出。Profile 只保存在当前设备，不提交、不共享、不上传。缓存按酒店名称与城市区分，减少重复解析详情页。
 

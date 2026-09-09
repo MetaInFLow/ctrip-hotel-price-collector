@@ -89,9 +89,9 @@ class LoginSessionTests(unittest.TestCase):
     def test_skill_delegates_browser_work_to_scripts_without_workflow_narrative(self):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("脚本运行契约", skill_text)
+        self.assertIn("运行契约", skill_text)
         self.assertIn("CTRIP_EVENT", skill_text)
-        self.assertIn("脚本负责搜索、登录状态检查、零价复核和登录提示", skill_text)
+        self.assertIn("运行程序负责搜索、登录状态检查、零价复核和登录提示", skill_text)
         self.assertNotIn("## CLI 原子能力", skill_text)
         self.assertNotIn("## 页面聚焦与操作原子性", skill_text)
         self.assertNotIn("## 统一登录门禁", skill_text)

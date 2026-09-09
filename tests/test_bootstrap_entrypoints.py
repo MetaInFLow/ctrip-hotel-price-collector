@@ -103,12 +103,14 @@ class BootstrapEntrypointTests(unittest.TestCase):
 
         self.assertIn("cloakbrowser==0.5.10", direct_requirements)
         self.assertIn("openpyxl==3.1.5", direct_requirements)
+        self.assertIn("socksio==1.0.0", direct_requirements)
         self.assertNotIn(">=", direct_requirements)
         self.assertTrue(LOCKED_REQUIREMENTS.is_file())
         locked_requirements = LOCKED_REQUIREMENTS.read_text(encoding="utf-8")
         self.assertIn("cloakbrowser==0.5.10", locked_requirements)
         self.assertIn("openpyxl==3.1.5", locked_requirements)
         self.assertIn("playwright==1.62.0", locked_requirements)
+        self.assertIn("socksio==1.0.0", locked_requirements)
 
     def test_shell_installer_uses_a_local_runtime_and_runs_preflight(self):
         shell_script = SHELL_BOOTSTRAP.read_text(encoding="utf-8")
@@ -471,17 +473,19 @@ class BootstrapEntrypointTests(unittest.TestCase):
         readme = README_PATH.read_text(encoding="utf-8")
         skill_contract = SKILL_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("bootstrap_ctrip_hotel_skill.sh", readme)
-        self.assertIn("bootstrap_ctrip_hotel_skill.cmd", readme)
+        self.assertIn("install.sh", readme)
+        self.assertIn("install.cmd", readme)
+        self.assertIn("bin/ctrip-agent", readme)
         self.assertIn("无需预装 Python", readme)
-        self.assertIn("代理环境变量", readme)
-        self.assertIn("bootstrap_ctrip_hotel_skill.sh", skill_contract)
-        self.assertIn("bootstrap_ctrip_hotel_skill.cmd", skill_contract)
+        self.assertIn("安装与环境验证不需要访问外部下载服务", readme)
+        self.assertIn("install.sh", skill_contract)
+        self.assertIn("install.cmd", skill_contract)
+        self.assertIn("bin/ctrip-agent", skill_contract)
         self.assertIn("无需依赖系统 Python", skill_contract)
-        self.assertNotIn(
-            "python3 /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.py",
-            readme,
-        )
+        self.assertIn("安装验证无需外部下载", skill_contract)
+        self.assertNotIn("代理环境变量", readme)
+        self.assertNotIn(".venv", readme)
+        self.assertNotIn("scripts/ctrip_cli.py", skill_contract)
 
     def test_reset_cleans_local_runtime_without_removing_customer_configuration(self):
         clean = load_clean_module()

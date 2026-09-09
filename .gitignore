@@ -4,3 +4,5 @@ __pycache__/
 .cloakbrowser-profile/
 .ctrip-hotel-detail-cache.json
 output/
+build/
+release/

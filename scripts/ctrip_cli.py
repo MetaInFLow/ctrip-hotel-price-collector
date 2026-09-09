@@ -41,6 +41,7 @@ from ctrip_hotel_prices import (  # noqa: E402
     validate_price_config,
     write_json,
 )
+from ctrip_runtime_setup import setup_runtime  # noqa: E402
 
 
 def default_profile_dir() -> Path:
@@ -128,6 +129,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect = subparsers.add_parser("collect", help="按 JSON 配置执行完整批量采集")
     collect.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     collect.add_argument("--login-only", action="store_true")
+
+    subparsers.add_parser("setup", help="验证浏览器组件和当前运行程序")
 
     for command_parser in (login, status, search, price, collect):
         _add_session_options(command_parser, suppress_defaults=True)
@@ -356,6 +359,13 @@ def run_collect(args: argparse.Namespace) -> int:
     )
 
 
+def run_setup(_args: argparse.Namespace) -> int:
+    print("正在准备 CloakBrowser 浏览器组件…", flush=True)
+    browser_binary = setup_runtime()
+    print(f"环境验证通过：{browser_binary}", flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -369,6 +379,8 @@ def main(argv=None) -> int:
             return run_search(args)
         if args.command == "price":
             return run_price(args)
+        if args.command == "setup":
+            return run_setup(args)
         return run_collect(args)
     except RuntimeError as exc:
         print(f"错误：{exc}", file=sys.stderr, flush=True)

@@ -65,7 +65,7 @@ class CliModuleTests(unittest.TestCase):
 
         self.assertEqual(
             cli_module.command_names(parser),
-            ["login", "login-status", "search", "price", "collect"],
+            ["login", "login-status", "search", "price", "collect", "setup"],
         )
 
     def test_page_selection_options_are_accepted_after_the_subcommand(self):
