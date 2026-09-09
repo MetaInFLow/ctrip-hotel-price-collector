@@ -2,6 +2,7 @@ import importlib.util
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +120,68 @@ class LoginGuardTests(unittest.TestCase):
         status = module.check_login(Browser(page), page)
 
         self.assertFalse(status["logged_in"])
+
+    def test_anchor_login_trigger_also_blocks_authentication(self):
+        module = load_guard_module()
+
+        class AnchorLoginPage(Page):
+            def locator(self, selector):
+                if selector == module.LOGIN_XPATH:
+                    return Locator(False)
+                if selector == "xpath=//a[normalize-space()='登录']":
+                    return Locator(True)
+                if selector == module.ORDERS_XPATH:
+                    return Locator(True)
+                raise AssertionError(f"未预期的选择器：{selector}")
+
+        page = AnchorLoginPage(module, login_visible=False, orders_visible=True)
+
+        status = module.check_login(Browser(page), page)
+
+        self.assertFalse(status["logged_in"])
+
+    def test_wait_for_login_accepts_a_new_login_popup_from_the_current_page(self):
+        module = load_guard_module()
+
+        class LoginButton(Locator):
+            def __init__(self, context, popup):
+                super().__init__(True)
+                self.context = context
+                self.popup = popup
+
+            def click(self):
+                self.context.pages.append(self.popup)
+
+        class LoginPage(Page):
+            def __init__(self, context, popup):
+                super().__init__(module, login_visible=True, orders_visible=False)
+                self.context = context
+                self.popup = popup
+
+            def locator(self, selector):
+                if selector == module.LOGIN_XPATH:
+                    return LoginButton(self.context, self.popup)
+                if selector == module.ORDERS_XPATH:
+                    return Locator(False)
+                raise AssertionError(f"未预期的选择器：{selector}")
+
+        context = Browser(None)
+        popup = Page(module, login_visible=False, orders_visible=True)
+        current_page = LoginPage(context, popup)
+        context.pages = [current_page]
+
+        with patch.object(module, "LOGIN_STATE_STABILITY_SECONDS", 0):
+            try:
+                result = module.wait_for_login(
+                    context,
+                    current_page,
+                    timeout_seconds=0.1,
+                    session_probe_seconds=0,
+                )
+            except module.LoginRequiredError:
+                result = None
+
+        self.assertIs(result, popup)
 
     def test_require_logged_in_rejects_an_unauthenticated_operation(self):
         module = load_guard_module()

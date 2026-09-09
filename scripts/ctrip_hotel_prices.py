@@ -13,6 +13,7 @@ import sys
 import time
 from collections.abc import Mapping
 from contextlib import contextmanager
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from ctrip_login_guard import (  # noqa: E402
     _first_visible,
     check_login,
     count_ctrip_cookies,
+    emit_event,
     find_logged_in_page,
     require_logged_in,
     wait_for_login,
@@ -715,6 +717,7 @@ def search_hotel(
     timeout_seconds: float,
     input_fn: Any = input,
 ) -> tuple[Any, str]:
+    emit_event("search.started", hotel_name=hotel_name)
     page = require_logged_in(browser, page, operation="酒店模糊搜索")
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
     page = require_logged_in(browser, page, operation="酒店模糊搜索")
@@ -744,6 +747,7 @@ def search_hotel(
             timeout_seconds,
             browser=browser,
         )
+    emit_event("search.candidates_found", hotel_name=hotel_name, count=len(candidates))
     selected_candidate = choose_hotel_candidate(candidates, input_fn=input_fn)
     selected_hotel_name = str(selected_candidate["name"])
     selected_page = selected_candidate.get("page", page)
@@ -756,9 +760,19 @@ def search_hotel(
         for candidate in pages:
             try:
                 if is_valid_detail_url(candidate.url):
+                    emit_event(
+                        "search.completed",
+                        hotel_name=selected_hotel_name,
+                        detail_url=candidate.url,
+                    )
                     return candidate, candidate.url
                 href = find_hotel_detail_href(candidate, selected_hotel_name)
                 if href:
+                    emit_event(
+                        "search.completed",
+                        hotel_name=selected_hotel_name,
+                        detail_url=href,
+                    )
                     return candidate, href
             except Exception:
                 continue
@@ -773,13 +787,24 @@ def search_hotel(
                     candidate.wait_for_timeout(1000)
                     for opened_page in browser_pages(browser, candidate):
                         if is_valid_detail_url(opened_page.url):
+                            emit_event(
+                                "search.completed",
+                                hotel_name=selected_hotel_name,
+                                detail_url=opened_page.url,
+                            )
                             return opened_page, opened_page.url
             except Exception:
                 continue
 
         selected_url = str(selected_candidate.get("url") or "").strip()
         if selected_url and is_valid_detail_url(selected_url):
-            return selected_page, urljoin(selected_page.url, selected_url)
+            detail_url = urljoin(selected_page.url, selected_url)
+            emit_event(
+                "search.completed",
+                hotel_name=selected_hotel_name,
+                detail_url=detail_url,
+            )
+            return selected_page, detail_url
         page.wait_for_timeout(1000)
 
     raise TimeoutError(f"搜索酒店超时，未找到详情页：{selected_hotel_name}")
@@ -973,6 +998,111 @@ def extract_page_price_rows(
     return rows
 
 
+def is_zero_price(value: Any) -> bool:
+    """Return whether a price value is numerically zero without coercing booleans."""
+
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return Decimal(str(value).strip()) == Decimal("0")
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def zero_price_summary(
+    responses: list[dict[str, Any]],
+    page_price_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize zero-valued response and page prices for session diagnostics."""
+
+    response_zero_count = 0
+    for response in responses:
+        response_data = response.get("data")
+        if not isinstance(response_data, dict):
+            continue
+        data = response_data.get("data")
+        if not isinstance(data, dict):
+            continue
+        sale_room_map = data.get("saleRoomMap")
+        if not isinstance(sale_room_map, dict):
+            continue
+        for sale_room in sale_room_map.values():
+            if not isinstance(sale_room, dict):
+                continue
+            price_info = sale_room.get("priceInfo")
+            if isinstance(price_info, dict) and is_zero_price(price_info.get("price")):
+                response_zero_count += 1
+
+    page_zero_count = sum(
+        1 for row in page_price_rows if is_zero_price(row.get("页面价格"))
+    )
+    return {
+        "detected": bool(response_zero_count or page_zero_count),
+        "response_zero_count": response_zero_count,
+        "page_zero_count": page_zero_count,
+    }
+
+
+def _public_login_status(status: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: status.get(key)
+        for key in (
+            "logged_in",
+            "orders_visible",
+            "login_visible",
+            "signals_readable",
+            "cookie_count",
+            "url",
+        )
+    }
+
+
+def check_zero_price_login(
+    browser: Any,
+    page: Any,
+    responses: list[dict[str, Any]],
+    page_price_rows: list[dict[str, Any]],
+    *,
+    login_timeout_seconds: float,
+    session_probe_seconds: float,
+    allow_relogin: bool,
+) -> tuple[Any, dict[str, Any]]:
+    """Recheck the session for a zero price and recover through the script login flow."""
+
+    result = {
+        **zero_price_summary(responses, page_price_rows),
+        "checked": False,
+        "relogin_performed": False,
+    }
+    if not result["detected"]:
+        return page, result
+
+    status = check_login(browser, page)
+    result["checked"] = True
+    result["login_status"] = _public_login_status(status)
+    emit_event("price.zero.login_check", **result)
+    if status["logged_in"]:
+        return page, result
+    if not allow_relogin:
+        emit_event("price.zero.login_required", **result)
+        raise LoginRequiredError("零价复核发现登录状态已失效，未再次重试价格采集。")
+
+    emit_event("price.zero.login_required", **result)
+    page = focus_page(page)
+    page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
+    page = wait_for_login(
+        browser,
+        page,
+        login_timeout_seconds,
+        session_probe_seconds=session_probe_seconds,
+        has_persisted_cookies=count_ctrip_cookies(browser) > 0,
+    )
+    page = require_logged_in(browser, page, operation="零价后的价格重试")
+    result["relogin_performed"] = True
+    emit_event("price.zero.reauthenticated", **result)
+    return page, result
+
+
 def capture_room_data(
     page: Any,
     detail_url: str,
@@ -986,6 +1116,8 @@ def capture_room_data(
     page_room_name_xpath: str = "",
     page_price_sample_size: int = 0,
     page_price_timeout_seconds: float = 15,
+    login_timeout_seconds: float = 600,
+    session_probe_seconds: float = 30,
 ) -> dict[str, Any]:
     page = require_logged_in(browser, page, operation="房价采集")
     normalized_mode = normalize_price_mode(price_mode)
@@ -1006,80 +1138,116 @@ def capture_room_data(
     if page_price_sample_size < 0:
         raise ValueError("page_price_sample_size 必须是大于等于 0 的整数")
 
-    responses: list[dict[str, Any]] = []
-    page_price_rows: list[dict[str, Any]] = []
-    page_price_error: str | None = None
+    retry_attempt = 0
+    relogin_performed = False
+    while True:
+        responses: list[dict[str, Any]] = []
+        page_price_rows: list[dict[str, Any]] = []
+        page_price_error: str | None = None
+        listening_page = page
 
-    # Keep the response listener active while the page prices are read. Expanding
-    # all room types can trigger a second room-list request.
-    def handle_response(response: Any) -> None:
-        if not is_room_list_api_url(response.url):
-            return
-        try:
-            if response.request.method.upper() == "OPTIONS":
+        # Keep the response listener active while the page prices are read. Expanding
+        # all room types can trigger a second room-list request.
+        def handle_response(response: Any) -> None:
+            if not is_room_list_api_url(response.url):
                 return
-            data = response.json()
-            responses.append(
-                {
-                    "url": response.url,
-                    "status": response.status,
-                    "method": response.request.method,
-                    "request_post_data": response.request.post_data,
-                    "data": data,
-                }
-            )
-        except Exception:
-            return
-
-    page.on("response", handle_response)
-    try:
-        page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
-        page = require_logged_in(browser, page, operation="房价采集")
-        if normalized_mode == "response":
-            response_deadline = time.monotonic() + api_timeout_seconds
-            while not responses and time.monotonic() < response_deadline:
-                page.wait_for_timeout(250)
-        if normalized_mode == "response" and not responses:
-            raise TimeoutError(
-                f"等待房型接口超时（{api_timeout_seconds:g} 秒）：{detail_url}"
-            )
-        page.wait_for_timeout(max(0, settle_ms))
-
-        should_read_page = normalized_mode == "page_xpath" or (
-            page_price_sample_size > 0 and bool(normalized_price_xpath)
-        )
-        if should_read_page:
             try:
-                page_price_rows = extract_page_price_rows(
-                    page,
-                    show_all_rooms_xpath=normalized_show_xpath,
-                    page_price_xpath=normalized_price_xpath,
-                    page_room_name_xpath=normalized_room_name_xpath,
-                    timeout_seconds=page_price_timeout_seconds,
-                    settle_ms=settle_ms,
-                    limit=None
-                    if normalized_mode == "page_xpath"
-                    else page_price_sample_size,
+                if response.request.method.upper() == "OPTIONS":
+                    return
+                data = response.json()
+                responses.append(
+                    {
+                        "url": response.url,
+                        "status": response.status,
+                        "method": response.request.method,
+                        "request_post_data": response.request.post_data,
+                        "data": data,
+                    }
                 )
-            except Exception as exc:
-                if normalized_mode == "page_xpath":
-                    raise
-                page_price_error = str(exc)
-        if normalized_mode == "page_xpath":
-            if not page_price_rows:
-                raise TimeoutError("页面 XPath 未读取到房价")
-            if not any(row.get("页面价格") is not None for row in page_price_rows):
-                raise ValueError("页面价格 XPath 命中的文本中没有可解析的数字价格")
-        return {
-            "responses": responses,
-            "page_price_rows": page_price_rows,
-            "page_price_error": page_price_error,
-        }
-    finally:
+            except Exception:
+                return
+
+        listening_page.on("response", handle_response)
         try:
-            page.remove_listener("response", handle_response)
-        except Exception:
-            pass
+            page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
+            page = require_logged_in(browser, page, operation="房价采集")
+            if normalized_mode == "response":
+                response_deadline = time.monotonic() + api_timeout_seconds
+                while not responses and time.monotonic() < response_deadline:
+                    page.wait_for_timeout(250)
+            if normalized_mode == "response" and not responses:
+                raise TimeoutError(
+                    f"等待房型接口超时（{api_timeout_seconds:g} 秒）：{detail_url}"
+                )
+            page.wait_for_timeout(max(0, settle_ms))
+
+            should_read_page = normalized_mode == "page_xpath" or (
+                page_price_sample_size > 0 and bool(normalized_price_xpath)
+            )
+            if should_read_page:
+                try:
+                    page_price_rows = extract_page_price_rows(
+                        page,
+                        show_all_rooms_xpath=normalized_show_xpath,
+                        page_price_xpath=normalized_price_xpath,
+                        page_room_name_xpath=normalized_room_name_xpath,
+                        timeout_seconds=page_price_timeout_seconds,
+                        settle_ms=settle_ms,
+                        limit=None
+                        if normalized_mode == "page_xpath"
+                        else page_price_sample_size,
+                    )
+                except Exception as exc:
+                    if normalized_mode == "page_xpath":
+                        raise
+                    page_price_error = str(exc)
+            if normalized_mode == "page_xpath":
+                if not page_price_rows:
+                    raise TimeoutError("页面 XPath 未读取到房价")
+                if not any(row.get("页面价格") is not None for row in page_price_rows):
+                    raise ValueError("页面价格 XPath 命中的文本中没有可解析的数字价格")
+            collection = {
+                "responses": responses,
+                "page_price_rows": page_price_rows,
+                "page_price_error": page_price_error,
+            }
+        finally:
+            try:
+                listening_page.remove_listener("response", handle_response)
+            except Exception:
+                pass
+
+        emit_event(
+            "price.captured",
+            response_count=len(responses),
+            page_price_count=len(page_price_rows),
+            price_mode=normalized_mode,
+        )
+        page, zero_price_login_check = check_zero_price_login(
+            browser,
+            page,
+            responses,
+            page_price_rows,
+            login_timeout_seconds=login_timeout_seconds,
+            session_probe_seconds=session_probe_seconds,
+            allow_relogin=retry_attempt == 0,
+        )
+        relogin_performed = (
+            relogin_performed or zero_price_login_check["relogin_performed"]
+        )
+        if relogin_performed:
+            zero_price_login_check["relogin_performed"] = True
+            zero_price_login_check["retry_count"] = retry_attempt
+        collection["zero_price_login_check"] = zero_price_login_check
+        if zero_price_login_check["relogin_performed"] and retry_attempt == 0:
+            retry_attempt += 1
+            emit_event(
+                "price.zero.retry",
+                response_zero_count=zero_price_login_check["response_zero_count"],
+                page_zero_count=zero_price_login_check["page_zero_count"],
+            )
+            continue
+        return collection
 
 
 def capture_room_list_responses(
@@ -1615,6 +1783,8 @@ def collect_prices(
                         page_price_timeout_seconds=float(
                             config["page_price_timeout_seconds"]
                         ),
+                        login_timeout_seconds=float(config["login_timeout_seconds"]),
+                        session_probe_seconds=float(config["session_probe_seconds"]),
                     )
                     responses = collection["responses"]
                     page_price_rows = collection["page_price_rows"]
@@ -1633,6 +1803,7 @@ def collect_prices(
                         sample_size=int(config["page_price_sample_size"]),
                     )
                     page_price_error = collection["page_price_error"]
+                    zero_price_login_check = collection["zero_price_login_check"]
                     check_status = page_price_check_status(
                         page_price_rows=page_price_rows,
                         checks=page_price_checks,
@@ -1681,6 +1852,7 @@ def collect_prices(
                         "page_price_rows": page_price_rows,
                         "page_price_checks": page_price_checks,
                         "page_price_check_status": check_status,
+                        "zero_price_login_check": zero_price_login_check,
                         "room_rows": room_rows,
                     }
                     if page_price_error:
@@ -1701,6 +1873,7 @@ def collect_prices(
                                 check.get("结果") == "mismatch"
                                 for check in page_price_checks
                             ),
+                            "zero_price_login_check": zero_price_login_check,
                             "detail_url": target_url,
                             "file": str(file_path),
                         }

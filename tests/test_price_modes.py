@@ -1,6 +1,9 @@
 import importlib.util
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +96,21 @@ class Response:
         return {"data": {}}
 
 
+class ZeroPriceResponse(Response):
+    def json(self):
+        return {
+            "data": {
+                "physicRoomMap": {},
+                "saleRoomMap": {
+                    "sale-1": {
+                        "physicalRoomId": "1",
+                        "priceInfo": {"price": 0},
+                    }
+                },
+            }
+        }
+
+
 class EmptyLocator(Locator):
     def __init__(self):
         super().__init__([])
@@ -120,6 +138,18 @@ class CapturingPage(Page):
     def remove_listener(self, event, handler):
         self.assert_response_event(event)
         self.removed_handler = handler
+
+
+class ZeroPriceCapturingPage(CapturingPage):
+    def __init__(self, module):
+        super().__init__(module)
+        self.goto_urls = []
+
+    def goto(self, url, wait_until=None, timeout=None):
+        del wait_until, timeout
+        self.goto_urls.append(url)
+        if self.response_handler and "/hotels/" in url:
+            self.response_handler(ZeroPriceResponse())
 
 
 class Browser:
@@ -236,6 +266,96 @@ class PriceModeTests(unittest.TestCase):
         self.assertEqual(len(collection["responses"]), 1)
         self.assertEqual(len(collection["page_price_rows"]), 1)
         self.assertIsNotNone(page.removed_handler)
+
+    def test_zero_price_rechecks_login_and_emits_monitor_event(self):
+        module = load_collector_module()
+        page = ZeroPriceCapturingPage(module)
+        browser = Browser(page)
+        logged_in = {
+            "logged_in": True,
+            "orders_visible": True,
+            "login_visible": False,
+            "signals_readable": True,
+            "cookie_count": 1,
+            "url": page.url,
+        }
+        output = StringIO()
+
+        with (
+            patch.object(
+                module,
+                "require_logged_in",
+                side_effect=lambda _browser, current_page, **_kwargs: current_page,
+            ),
+            patch.object(module, "check_login", return_value=logged_in) as login_check,
+            redirect_stdout(output),
+        ):
+            collection = module.capture_room_data(
+                page,
+                "https://hotels.ctrip.com/hotels/1.html?cityid=95",
+                browser=browser,
+                api_timeout_seconds=1,
+                settle_ms=0,
+            )
+
+        self.assertEqual(login_check.call_count, 1)
+        self.assertIn("CTRIP_EVENT", output.getvalue())
+        self.assertIn('"event": "price.zero.login_check"', output.getvalue())
+        self.assertTrue(
+            collection.get("zero_price_login_check", {}).get("checked")
+        )
+        self.assertFalse(
+            collection.get("zero_price_login_check", {}).get("relogin_performed")
+        )
+
+    def test_zero_price_uses_script_login_and_retries_once_when_session_is_invalid(self):
+        module = load_collector_module()
+        page = ZeroPriceCapturingPage(module)
+        browser = Browser(page)
+        logged_out = {
+            "logged_in": False,
+            "orders_visible": True,
+            "login_visible": True,
+            "signals_readable": True,
+            "cookie_count": 0,
+            "url": page.url,
+        }
+        logged_in = {
+            "logged_in": True,
+            "orders_visible": True,
+            "login_visible": False,
+            "signals_readable": True,
+            "cookie_count": 1,
+            "url": page.url,
+        }
+
+        with (
+            patch.object(
+                module,
+                "require_logged_in",
+                side_effect=lambda _browser, current_page, **_kwargs: current_page,
+            ),
+            patch.object(module, "check_login", side_effect=[logged_out, logged_in]),
+            patch.object(module, "wait_for_login", return_value=page) as wait_for_login,
+        ):
+            collection = module.capture_room_data(
+                page,
+                "https://hotels.ctrip.com/hotels/1.html?cityid=95",
+                browser=browser,
+                api_timeout_seconds=1,
+                settle_ms=0,
+            )
+
+        self.assertEqual(
+            page.goto_urls.count(
+                "https://hotels.ctrip.com/hotels/1.html?cityid=95"
+            ),
+            2,
+        )
+        wait_for_login.assert_called_once()
+        self.assertTrue(
+            collection.get("zero_price_login_check", {}).get("relogin_performed")
+        )
 
     def test_capture_room_data_requires_a_browser_for_the_login_gate(self):
         module = load_collector_module()

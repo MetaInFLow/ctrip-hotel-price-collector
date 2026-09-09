@@ -62,6 +62,8 @@ def collect_one_stay(
         page_price_timeout_seconds=float(
             config.get("page_price_timeout_seconds", 15)
         ),
+        login_timeout_seconds=float(config.get("login_timeout_seconds", 600)),
+        session_probe_seconds=float(config.get("session_probe_seconds", 30)),
     )
     captured_at = datetime.now(timezone.utc).isoformat()
     response_rows = flatten_room_rows(
@@ -108,6 +110,7 @@ def collect_one_stay(
             checks=checks,
             error=page_price_error,
         ),
+        "zero_price_login_check": collection["zero_price_login_check"],
         "room_rows": room_rows,
     }
     if page_price_error:

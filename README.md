@@ -1,34 +1,51 @@
 # FDE特供携程比价技能
 
-在用户自己的携程登录状态下，使用持久化 CloakBrowser 采集指定酒店、指定日期的房型价格，并输出 Excel。所有携程页面操作都由技能脚本完成。
+在用户自己的携程本地会话中，采集指定酒店与日期区间的房型价格，并输出 JSON 和 Excel 比价结果。
 
-价格默认来自房型接口响应。需要页面口径时，在配置中设置 `price_mode` 为 `page_xpath`，并提供 `show_all_rooms_xpath` 与 `page_price_xpath`；脚本会先点击“展示所有房型”，再读取页面价格。接口模式配置页面价格 XPath 后，会默认抽查 3 条页面价格并把差异写入每日 JSON。
+## 部署
 
-## 使用
+macOS/Linux：
 
-1. macOS/Linux 执行 `python3 /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.py`；Windows PowerShell 执行 `py C:\绝对路径\ctrip-hotel-price-collector\scripts\bootstrap_ctrip_hotel_skill.py`，部署 Python、CloakBrowser 与 openpyxl 依赖。
-2. 编辑 `/绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json`，配置酒店列表、城市、起始日期和采集天数。默认 `price_mode` 为 `response`；页面模式需要额外配置页面 XPath。多个酒店会在同一个浏览器实例内按配置顺序依次采集。
-3. 首次执行 `/绝对路径/ctrip-hotel-price-collector/.venv/bin/python /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py --login-only`，在可见浏览器中手动登录携程；Windows 将解释器替换为 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Scripts\python.exe`。
-4. 使用同一绝对解释器执行采集脚本，并传入绝对配置路径。批量采集默认在完成后关闭浏览器；需要保留窗口观察时，在单实例配置中显式设置 `keep_browser_open` 为 `true`。
+```bash
+python3 /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.py
+```
 
-结果写入固定的绝对路径。macOS Cookie/Profile 位于 `/Users/<系统用户名>/Library/Application Support/ctrip-hotel-price-collector/.cloakbrowser-profile`；Windows Cookie/Profile 位于 `C:\Users\<系统用户名>\AppData\Local\ctrip-hotel-price-collector\.cloakbrowser-profile`。详情页缓存和 Excel 输出位于同一系统存储根目录下。登录 Profile 中的 Cookie 会由脚本自动复用；所有携程页面操作都必须在该 CloakBrowser 会话中完成。脚本只记录 Cookie 数量，不输出 Cookie 值。自定义路径必须使用绝对路径。
+Windows PowerShell：
 
-Excel 由 Python `openpyxl` 生成，不需要 Node.js。
+```powershell
+py C:\绝对路径\ctrip-hotel-price-collector\scripts\bootstrap_ctrip_hotel_skill.py
+```
 
-## CLI 原子功能
+部署脚本始终把运行环境创建在技能包目录的 `.venv`，并安装 CloakBrowser 与 `openpyxl`。
 
-统一入口是 `scripts/ctrip_cli.py`：
+## 采集
 
-- `login`：登录并保存持久化会话。
-- `login-status`：等待当前页登录信号稳定后检查“我的订单”可见且“登录”不可见；Cookie 数量只作诊断信息。
-- `search`：模糊搜索酒店、展示候选并选择详情页。
-- `price`：按起始日期采集价格，支持 `response` 和 `page_xpath`。
-- `collect`：按 JSON 配置执行完整批量采集和 Excel 导出。
+编辑 `ctrip_hotel_config.json` 后，使用该技能包的 Python 运行批量采集：
 
-页面操作使用显式的 `--page-index` 或 `--page-url-contains` 选页，并在每次操作前调用 `bring_to_front()`；CloakBrowser 不提供启动级页面聚焦参数，操作系统窗口前台状态由系统决定。macOS 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再连接本机 CDP，避免 Playwright 直接派生 Chromium 时的系统启动崩溃；Windows/Linux 使用 CloakBrowser 原生持久化启动。macOS 初始化异常或关闭失败时，脚本会按独立 Profile 与调试端口回收对应 Chromium，避免留下 `about:blank` 残留窗口。
+```bash
+/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py collect \
+  --config /绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json
+```
 
-所有原子操作都经过 `scripts/ctrip_login_guard.py` 的代码门禁。登录状态必须同时满足“我的订单”可见和“登录”不可见，并在稳定窗口内保持；导航后的瞬态登录标识会被轮询穿过，默认最多探测 15 秒。`login-status` 可单独执行此检查。搜索、候选选择、详情解析、接口响应取价和页面 XPath 取价都会在继续前验证登录状态，价格底层函数强制接收浏览器上下文。登录会话保存后，命令默认正常关闭浏览器；无交互终端中的 EOF 也按正常关闭处理。
+Windows 使用 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Scripts\python.exe`。脚本会自动检查本地会话；需要登录时会打开可见窗口并等待用户完成登录，然后继续采集。零价结果会触发一次登录状态复核；会话失效时脚本完成重新登录后只重试一次。
 
-未命中详情页缓存的酒店会在当前会话中顺序搜索并缓存；命中缓存的酒店直接复用详情页地址。采集按酒店、按日期依次执行，每个日期完成后立即落盘，浏览器会在任务结束时关闭，主 Profile 和本地 Cookie 保留。
+运行日志以 `CTRIP_EVENT {JSON}` 输出，可用于监控登录、搜索、零价复核和重试状态。日志不包含 Cookie 值、账号或密码。
 
-完整流程与约束见 [SKILL.md](SKILL.md)。
+## 清空本机运行环境
+
+如需模拟刚安装技能、重新部署和登录，可先执行清理脚本。默认仅预览：
+
+```bash
+python3 /绝对路径/ctrip-hotel-price-collector/scripts/clean_ctrip_hotel_environment.py
+```
+
+确认删除运行环境和本地状态：
+
+```bash
+python3 /绝对路径/ctrip-hotel-price-collector/scripts/clean_ctrip_hotel_environment.py --yes
+```
+
+如需同时删除技能目录旁的历史备份，加上 `--include-backups`。脚本保留技能源码，不触碰 `~/.codex` 或其他工作台。
+
+本机持久化目录保存登录 Profile、详情页缓存和输出文件。该目录包含敏感会话数据，只保存在当前设备。完整业务约定见 [SKILL.md](SKILL.md)。

@@ -14,7 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ctrip_cli_browser import HOME_URL, browser_pages, focus_page  # noqa: E402
-from ctrip_login_guard import require_logged_in  # noqa: E402
+from ctrip_login_guard import emit_event, require_logged_in  # noqa: E402
 from ctrip_hotel_prices import (  # noqa: E402
     HOTEL_SEARCH_BUTTON_XPATH,
     HOTEL_SEARCH_INPUT_XPATH,
@@ -37,6 +37,7 @@ def search_candidates(
 
     if not str(keyword).strip():
         raise ValueError("酒店模糊搜索词不能为空")
+    emit_event("search.started", hotel_name=str(keyword).strip())
     page = require_logged_in(browser, page, operation="酒店模糊搜索")
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
     page = require_logged_in(browser, page, operation="酒店模糊搜索")
@@ -60,6 +61,11 @@ def search_candidates(
     for candidate_page in browser_pages(browser):
         candidates = extract_hotel_candidates(candidate_page)
         if candidates:
+            emit_event(
+                "search.candidates_found",
+                hotel_name=str(keyword).strip(),
+                count=len(candidates),
+            )
             return focus_page(candidate_page), candidates
 
     # Ctrip sometimes closes the result list after a button click. Re-filling
@@ -69,6 +75,11 @@ def search_candidates(
         page,
         timeout_seconds,
         browser=browser,
+    )
+    emit_event(
+        "search.candidates_found",
+        hotel_name=str(keyword).strip(),
+        count=len(candidates),
     )
     return focus_page(page), candidates
 
@@ -101,6 +112,11 @@ def select_candidate(
             candidate_page = focus_page(candidate_page)
             candidate_url = str(getattr(candidate_page, "url", ""))
             if is_valid_detail_url(candidate_url):
+                emit_event(
+                    "search.completed",
+                    hotel_name=selected_name,
+                    detail_url=candidate_url,
+                )
                 return candidate_page, {
                     "name": selected_name,
                     "district": selected.get("district", ""),
@@ -108,10 +124,16 @@ def select_candidate(
                 }
         selected_url = str(selected.get("url", "")).strip()
         if selected_url and is_valid_detail_url(selected_url):
+            detail_url = urljoin(str(getattr(selected_page, "url", "")), selected_url)
+            emit_event(
+                "search.completed",
+                hotel_name=selected_name,
+                detail_url=detail_url,
+            )
             return selected_page, {
                 "name": selected_name,
                 "district": selected.get("district", ""),
-                "url": urljoin(str(getattr(selected_page, "url", "")), selected_url),
+                "url": detail_url,
             }
         page.wait_for_timeout(500)
     raise TimeoutError(f"等待酒店详情页超时：{selected_name}")

@@ -44,8 +44,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--venv-dir",
         type=Path,
-        default=Path(os.environ.get("CTRIP_VENV_DIR") or Path.cwd() / ".venv"),
-        help="虚拟环境目录，默认为当前目录下的 .venv",
+        default=Path(os.environ.get("CTRIP_VENV_DIR") or SKILL_DIR / ".venv"),
+        help="虚拟环境目录，默认为技能包目录下的 .venv",
     )
     parser.add_argument(
         "--python",

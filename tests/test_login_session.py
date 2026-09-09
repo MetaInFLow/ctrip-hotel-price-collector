@@ -86,15 +86,15 @@ class LoginSessionTests(unittest.TestCase):
         self.assertIn('display_name: "FDE特供携程比价技能"', metadata_text)
         self.assertIn("short_description:", metadata_text)
 
-    def test_skill_requires_cloakbrowser_script_as_the_only_browser_entrypoint(self):
+    def test_skill_delegates_browser_work_to_scripts_without_workflow_narrative(self):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("浏览器唯一入口", skill_text)
-        self.assertIn("所有携程页面操作", skill_text)
-        self.assertIn("系统默认浏览器", skill_text)
-        self.assertIn("launch_persistent_context", skill_text)
-        self.assertIn("脚本是唯一执行入口", skill_text)
-        self.assertIn("open_ctrip.py", skill_text)
+        self.assertIn("脚本运行契约", skill_text)
+        self.assertIn("CTRIP_EVENT", skill_text)
+        self.assertIn("脚本负责搜索、登录状态检查、零价复核和登录提示", skill_text)
+        self.assertNotIn("## CLI 原子能力", skill_text)
+        self.assertNotIn("## 页面聚焦与操作原子性", skill_text)
+        self.assertNotIn("## 统一登录门禁", skill_text)
 
     def test_open_ctrip_uses_the_shared_persistent_profile(self):
         module = load_open_module()
@@ -328,6 +328,13 @@ class LoginSessionTests(unittest.TestCase):
             module.venv_python(venv_dir, os_name="posix"),
             venv_dir / "bin" / "python",
         )
+
+    def test_bootstrap_defaults_to_the_skill_directory_venv(self):
+        module = load_bootstrap_module()
+
+        args = module.parse_args([])
+
+        self.assertEqual(args.venv_dir, module.SKILL_DIR / ".venv")
 
     def test_rejects_relative_profile_path(self):
         module = load_collector_module()
