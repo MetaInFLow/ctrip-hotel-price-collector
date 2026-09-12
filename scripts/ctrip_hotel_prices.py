@@ -1525,6 +1525,25 @@ def collect_prices(
             print(f"{label}前随机等待 {delay:.2f} 秒。", flush=True)
         operation_started = True
 
+    def ensure_collection_login(current_page: Any) -> Any:
+        """Re-open the login gate once when a long batch session expires."""
+
+        try:
+            return require_logged_in(browser, current_page, operation="酒店价格采集")
+        except LoginRequiredError:
+            print("检测到登录状态失效，正在重新打开登录流程。", flush=True)
+            refreshed_page = wait_for_login(
+                browser,
+                current_page,
+                float(config["login_timeout_seconds"]),
+                session_probe_seconds=float(config["session_probe_seconds"]),
+            )
+            return require_logged_in(
+                browser,
+                refreshed_page,
+                operation="重新登录后的酒店价格采集",
+            )
+
     try:
         print("正在启动带本地会话的 CloakBrowser...", flush=True)
         if profile_exists:
@@ -1582,6 +1601,7 @@ def collect_prices(
 
             for check_in, check_out in stays:
                 wait_between_operations(f"抓取日期 {check_in.isoformat()}")
+                page = ensure_collection_login(page)
                 target_url = build_detail_url(
                     detail_url,
                     check_in,
