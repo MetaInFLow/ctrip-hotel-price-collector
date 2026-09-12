@@ -381,6 +381,20 @@ def run_collect(args: argparse.Namespace) -> int:
             "detail_url_cache_file": str(
                 default_session_root() / DEFAULT_DETAIL_CACHE_NAME
             ),
+            "session_probe_seconds": 30,
+            "random_sleep_min_seconds": 2,
+            "random_sleep_max_seconds": 5,
+            "login_timeout_seconds": 600,
+            "search_timeout_seconds": 45,
+            "api_timeout_seconds": 45,
+            "settle_ms": 1500,
+            "keep_browser_open": False,
+            "price_mode": "response",
+            "show_all_rooms_xpath": DEFAULT_SHOW_ALL_ROOMS_XPATH,
+            "page_price_xpath": "",
+            "page_room_name_xpath": "",
+            "page_price_sample_size": 3,
+            "page_price_timeout_seconds": 15,
         }
         config_dir = Path.cwd()
     config["profile_dir"] = str(args.profile_dir.expanduser().resolve())

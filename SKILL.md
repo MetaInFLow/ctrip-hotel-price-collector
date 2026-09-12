@@ -148,9 +148,11 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 
 初次使用必须先完成本节；未完成时不得直接调用业务采集脚本。初始化脚本先检测本机是否有 Python 3.12+；如未检测到或版本过低，直接输出 Python 官方下载地址并停止，用户安装完成后重新运行。检测通过后才在 Skill 运行时目录中创建或复用 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 只由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成。
 
+初始化脚本的唯一位置是 `<skill目录>/scripts/bootstrap_ctrip_hotel_skill.sh`（Windows 使用 `<skill目录>/scripts/bootstrap_ctrip_hotel_skill.py`）；禁止猜测或调用 Skill 根目录下的同名文件。
+
 macOS/Linux：
 ```bash
-bash /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.sh
+ bash /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.sh
 ```
 
 脚本会自动检测本机 Python，并将虚拟环境固定在 `<skill目录>/.runtime/python-3.12/`。
