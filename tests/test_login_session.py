@@ -86,6 +86,14 @@ class LoginSessionTests(unittest.TestCase):
         self.assertIn('display_name: "FDE特供携程比价技能"', metadata_text)
         self.assertIn("short_description:", metadata_text)
 
+    def test_skill_uses_fast_path_when_required_parameters_are_present(self):
+        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("## 快速执行路径", skill_text)
+        self.assertIn("一次性写入配置并调用 `collect --config`", skill_text)
+        self.assertIn("不先调用 `login-status` 、`setup` 、`search`", skill_text)
+        self.assertIn("只追问缺失的必填字段", skill_text)
+
     def test_skill_requires_cloakbrowser_script_as_the_only_browser_entrypoint(self):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
 

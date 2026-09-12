@@ -1,4 +1,4 @@
 interface:
   display_name: "FDE特供携程比价技能"
   short_description: "登录态携程酒店模糊选店、多日期比价、接口或页面 XPath 取价与 Excel 导出"
-  default_prompt: "使用 $ctrip-hotel-price-collector 的 CLI 原子命令，在登录态下完成携程登录检查、模糊选店或多日期房型比价，并输出 JSON 或 Excel。"
+  default_prompt: "从用户请求直接提取酒店、城市、入住起始日和采集天数；只追问缺失必填参数，参数齐全后直接调用 $ctrip-hotel-price-collector 的 collect 入口。登录检查、浏览器初始化和结果导出由脚本负责。"
