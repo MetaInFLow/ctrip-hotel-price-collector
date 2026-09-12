@@ -94,6 +94,17 @@ class LoginSessionTests(unittest.TestCase):
         self.assertIn("不先调用 `login-status` 、`setup` 、`search`", skill_text)
         self.assertIn("只追问缺失的必填字段", skill_text)
 
+    def test_skill_requires_direct_script_execution_without_inline_python(self):
+        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+        metadata_text = METADATA_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("scripts/ctrip_cli.py collect --config", skill_text)
+        self.assertIn(".venv/bin/python", skill_text)
+        self.assertIn("python -c", skill_text)
+        self.assertIn("here-document", skill_text)
+        self.assertIn("scripts/ctrip_cli.py collect --config", metadata_text)
+        self.assertIn("python -c", metadata_text)
+
     def test_skill_requires_cloakbrowser_script_as_the_only_browser_entrypoint(self):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
 

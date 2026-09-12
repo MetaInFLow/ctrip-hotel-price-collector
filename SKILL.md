@@ -19,6 +19,15 @@ description: >-
 - 登录、状态检查、浏览器启动、搜索、采集和 Excel 导出全部由脚本负责。
 - 只在脚本返回登录提示、参数错误或环境错误时停下处理，其他情况不插入中间步骤。
 
+## 脚本执行规范
+
+- 必须直接执行现有脚本文件，不得使用 `python -c`、`python3 -c`、here-document 或内联 Python 代码替代脚本。
+- 批量采集的唯一正式命令是：
+  `/绝对路径/.venv/bin/python /绝对路径/scripts/ctrip_cli.py collect --config /绝对配置路径/ctrip_hotel_config.json`。
+- 必须使用技能包自己的 `.venv/bin/python`；不得调用系统 Python、系统终端中的临时脚本或任意外部解释器。
+- 配置写入临时文件后，直接使用上述命令调用 `scripts/ctrip_cli.py`；不要先读取、改写或解释脚本源码。
+- 客户原生包使用 `bin/ctrip-agent collect --config <绝对配置路径>`，不调用 Python；源码态和原生包不得混用。
+
 ## 浏览器唯一入口
 
 - 所有携程页面操作，包括打开页面、登录、输入、点击、候选选择、页面跳转和接口监听，都必须由本 Skill 的脚本通过 CloakBrowser 执行。
