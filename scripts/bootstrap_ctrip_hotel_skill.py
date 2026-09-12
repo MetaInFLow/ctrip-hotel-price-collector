@@ -14,6 +14,7 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parents[1]
 REQUIREMENTS_FILE = SKILL_DIR / "requirements-cloak.txt"
 MIN_PYTHON = (3, 12)
+DEFAULT_VENV_DIR = SKILL_DIR / ".runtime" / "python-3.12"
 
 
 def venv_python(venv_dir: Path, *, os_name: str | None = None) -> Path:
@@ -45,8 +46,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--venv-dir",
         type=Path,
-        default=Path(os.environ.get("CTRIP_VENV_DIR") or Path.cwd() / ".venv"),
-        help="虚拟环境目录，默认为当前目录下的 .venv",
+        default=Path(os.environ.get("CTRIP_VENV_DIR") or DEFAULT_VENV_DIR),
+        help="虚拟环境目录，默认为 Skill 运行时目录下的 python-3.12",
     )
     parser.add_argument(
         "--python",

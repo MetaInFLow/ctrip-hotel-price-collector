@@ -99,7 +99,7 @@ class LoginSessionTests(unittest.TestCase):
         metadata_text = METADATA_PATH.read_text(encoding="utf-8")
 
         self.assertIn("scripts/ctrip_cli.py collect --hotel", skill_text)
-        self.assertIn(".venv/bin/python", skill_text)
+        self.assertIn(".runtime/python-3.12/bin/python", skill_text)
         self.assertIn("python -c", skill_text)
         self.assertIn("here-document", skill_text)
         self.assertIn("scripts/ctrip_cli.py collect --hotel", metadata_text)

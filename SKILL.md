@@ -23,8 +23,8 @@ description: >-
 
 - 必须直接执行现有脚本文件，不得使用 `python -c`、`python3 -c`、here-document 或内联 Python 代码替代脚本。
 - 源码态采集的正式命令是：
-  `/绝对路径/.venv/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。
-- 必须使用技能包自己的 `.venv/bin/python`；不得调用系统 Python、系统终端中的临时脚本或任意外部解释器。
+  `/绝对路径/.runtime/python-3.12/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。
+- 必须使用 Skill 运行时目录中固定的 Python 3.12 虚拟环境：`<skill目录>/.runtime/python-3.12/bin/python`（Windows 为 `.runtime\\python-3.12\\Scripts\\python.exe`）；不得调用系统 Python 执行业务脚本。
 - 不写入临时配置文件，直接使用上述参数命令调用 `scripts/ctrip_cli.py`；不要先读取、改写或解释脚本源码。
 - 客户原生包使用 `bin/ctrip-agent collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`，不调用 Python；源码态和原生包不得混用。
 
@@ -61,17 +61,17 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 调用示例：
 
 ```bash
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py login
 
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py login-status
 
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py search \
   --keyword 峨眉山景区智选假日酒店
 
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py price \
   --detail-url 'https://hotels.ctrip.com/hotels/119084256.html?cityid=95' \
   --start-date 2026-09-06 --days 3 --price-mode response
@@ -80,7 +80,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 页面 XPath 价格示例：
 
 ```bash
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py price \
   --detail-url 'https://hotels.ctrip.com/hotels/119084256.html?cityid=95' \
   --start-date 2026-09-06 --price-mode page_xpath \
@@ -158,7 +158,7 @@ bash /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_ski
 Windows PowerShell：
 ```powershell
 py C:\绝对路径\ctrip-hotel-price-collector\scripts\bootstrap_ctrip_hotel_skill.py `
-  --venv-dir C:\绝对路径\ctrip-hotel-price-collector\.venv
+  --venv-dir C:\绝对路径\ctrip-hotel-price-collector\.runtime\python-3.12
 ```
 
 macOS/Linux 也可以执行同目录下的 `bootstrap_ctrip_hotel_skill.sh`，它只是上述 Python 部署脚本的便捷包装。
@@ -166,25 +166,25 @@ macOS/Linux 也可以执行同目录下的 `bootstrap_ctrip_hotel_skill.sh`，�
 部署完成后先检查：
 
 ```bash
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py --help
 ```
 
-Windows 检查命令使用 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Scripts\python.exe`。
+Windows 检查命令使用 `C:\绝对路径\ctrip-hotel-price-collector\.runtime\python-3.12\Scripts\python.exe`。
 
 ## 运行
 
 首次只保存登录会话：
 
 ```bash
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py --login-only
 ```
 
 执行采集：
 
 ```bash
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
 /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py \
   --config /绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json
 ```
@@ -192,7 +192,7 @@ Windows 检查命令使用 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Sc
 使用页面 XPath 作为价格来源：
 
 ```bash
-/绝对路径/ctrip-hotel-price-collector/.venv/bin/python \
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
   /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py \
   --config /绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json \
   --price-mode page_xpath \

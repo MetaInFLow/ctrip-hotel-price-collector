@@ -8,7 +8,7 @@
 
 1. 先执行对应操作系统的初始化脚本。脚本会先检测 Python 3.12+；如未检测到，请根据提示从 [Python 官方下载页](https://www.python.org/downloads/) 安装后重新执行。
 2. 编辑 `/绝对路径/ctrip-hotel-price-collector/ctrip_hotel_config.json`，配置酒店列表、城市、起始日期和采集天数。默认 `price_mode` 为 `response`；页面模式需要额外配置页面 XPath。多个酒店会在同一个浏览器实例内按配置顺序依次采集。
-3. 首次执行 `/绝对路径/ctrip-hotel-price-collector/.venv/bin/python /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_hotel_prices.py --login-only`，在可见浏览器中手动登录携程；Windows 将解释器替换为 `C:\绝对路径\ctrip-hotel-price-collector\.venv\Scripts\python.exe`。
+3. 首次执行 Skill 运行时目录中的 Python 脚本进行登录：`<skill目录>/.runtime/python-3.12/bin/python`（Windows 为 `.runtime\\python-3.12\\Scripts\\python.exe`）。
 4. 使用同一绝对解释器执行采集脚本，并传入绝对配置路径。批量采集默认在完成后关闭浏览器；需要保留窗口观察时，在单实例配置中显式设置 `keep_browser_open` 为 `true`。
 
 结果写入固定的绝对路径。macOS Cookie/Profile 位于 `/Users/<系统用户名>/Library/Application Support/ctrip-hotel-price-collector/.cloakbrowser-profile`；Windows Cookie/Profile 位于 `C:\Users\<系统用户名>\AppData\Local\ctrip-hotel-price-collector\.cloakbrowser-profile`。详情页缓存和 Excel 输出位于同一系统存储根目录下。登录 Profile 中的 Cookie 会由脚本自动复用；所有携程页面操作都必须在该 CloakBrowser 会话中完成。脚本只记录 Cookie 数量，不输出 Cookie 值。自定义路径必须使用绝对路径。
