@@ -144,16 +144,16 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - 任务状态写入输出目录的 `index.json`：`running` 表示执行中，`ready_for_export` 表示原始结果已落盘，`completed` 表示 Excel 已生成，`failed` 表示任务异常结束。脚本按日期增量保存，实例提前清理后可依据已落盘结果重跑。
 - `keep_browser_open` 默认是 `false`，采集完成后自动关闭浏览器；需要人工观察时显式设置为 `true`。该配置只控制是否等待关闭，不承诺 instance 持续存在；任务完成以 `index.json` 和 Excel 文件写入成功为准。
 
-## 新机部署
+## 项目初始化
 
-首次运行前执行一次跨平台部署脚本。脚本会先检测本机是否有 Python 3.12+；如未检测到或版本过低，脚本会直接输出 Python 官方下载地址并停止，用户安装完成后重新运行。检测通过后才创建或更新 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 只由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成。
+初次使用必须先完成本节；未完成时不得直接调用业务采集脚本。初始化脚本先检测本机是否有 Python 3.12+；如未检测到或版本过低，直接输出 Python 官方下载地址并停止，用户安装完成后重新运行。检测通过后才在 Skill 运行时目录中创建或复用 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 只由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成。
 
 macOS/Linux：
 ```bash
 bash /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.sh
 ```
 
-脚本会自动检测本机 Python。如未安装，请从 [Python 官方下载页](https://www.python.org/downloads/) 安装 3.12+后重新执行。
+脚本会自动检测本机 Python，并将虚拟环境固定在 `<skill目录>/.runtime/python-3.12/`。
 
 Windows PowerShell：
 ```powershell
