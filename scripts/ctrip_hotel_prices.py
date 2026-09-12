@@ -986,8 +986,20 @@ def capture_room_data(
     page_room_name_xpath: str = "",
     page_price_sample_size: int = 0,
     page_price_timeout_seconds: float = 15,
+    login_timeout_seconds: float = 600,
+    session_probe_seconds: float = 30,
 ) -> dict[str, Any]:
-    page = require_logged_in(browser, page, operation="房价采集")
+    try:
+        page = require_logged_in(browser, page, operation="房价采集")
+    except LoginRequiredError:
+        print("检测到登录状态失效，正在重新打开登录流程。", flush=True)
+        page = wait_for_login(
+            browser,
+            page,
+            login_timeout_seconds,
+            session_probe_seconds=session_probe_seconds,
+        )
+        page = require_logged_in(browser, page, operation="重新登录后的房价采集")
     normalized_mode = normalize_price_mode(price_mode)
     normalized_show_xpath = normalize_xpath_selector(
         show_all_rooms_xpath,
@@ -1034,7 +1046,22 @@ def capture_room_data(
     page.on("response", handle_response)
     try:
         page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
-        page = require_logged_in(browser, page, operation="房价采集")
+        try:
+            page = require_logged_in(browser, page, operation="房价采集")
+        except LoginRequiredError:
+            print("详情页导航后登录状态失效，正在重新登录并重试当前日期。", flush=True)
+            page = wait_for_login(
+                browser,
+                page,
+                login_timeout_seconds,
+                session_probe_seconds=session_probe_seconds,
+            )
+            page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
+            page = require_logged_in(
+                browser,
+                page,
+                operation="重新登录后的房价采集",
+            )
         if normalized_mode == "response":
             response_deadline = time.monotonic() + api_timeout_seconds
             while not responses and time.monotonic() < response_deadline:
@@ -1635,6 +1662,8 @@ def collect_prices(
                         page_price_timeout_seconds=float(
                             config["page_price_timeout_seconds"]
                         ),
+                        login_timeout_seconds=float(config["login_timeout_seconds"]),
+                        session_probe_seconds=float(config["session_probe_seconds"]),
                     )
                     responses = collection["responses"]
                     page_price_rows = collection["page_price_rows"]
