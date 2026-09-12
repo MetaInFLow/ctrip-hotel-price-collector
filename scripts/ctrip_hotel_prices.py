@@ -1049,19 +1049,25 @@ def capture_room_data(
         try:
             page = require_logged_in(browser, page, operation="房价采集")
         except LoginRequiredError:
-            print("详情页导航后登录状态失效，正在重新登录并重试当前日期。", flush=True)
-            page = wait_for_login(
-                browser,
-                page,
-                login_timeout_seconds,
-                session_probe_seconds=session_probe_seconds,
-            )
-            page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
-            page = require_logged_in(
-                browser,
-                page,
-                operation="重新登录后的房价采集",
-            )
+            # Detail pages can temporarily omit the shared navigation markers.
+            # Verify the persistent session on the home page before forcing a
+            # new login, then return to the detail URL when the session survives.
+            print("详情页登录信号不可用，先回到携程首页复核本地会话。", flush=True)
+            home_page = page
+            home_page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
+            try:
+                require_logged_in(browser, home_page, operation="携程首页会话复核")
+                page = home_page
+                page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
+            except LoginRequiredError:
+                print("携程首页也确认登录状态失效，正在重新打开登录流程。", flush=True)
+                page = wait_for_login(
+                    browser,
+                    home_page,
+                    login_timeout_seconds,
+                    session_probe_seconds=session_probe_seconds,
+                )
+                page.goto(detail_url, wait_until="domcontentloaded", timeout=60_000)
         if normalized_mode == "response":
             response_deadline = time.monotonic() + api_timeout_seconds
             while not responses and time.monotonic() < response_deadline:
