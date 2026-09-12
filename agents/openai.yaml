@@ -1,4 +1,4 @@
 interface:
   display_name: "FDE特供携程比价技能"
   short_description: "登录态携程酒店模糊选店、多日期比价、接口或页面 XPath 取价与 Excel 导出"
-  default_prompt: "从用户请求直接提取酒店、城市、入住起始日和采集天数；只追问缺失必填参数，参数齐全后直接执行技能包脚本的 `scripts/ctrip_cli.py collect --config <绝对配置路径>`，禁止 `python -c` 和内联 Python 代码。登录检查、浏览器初始化和结果导出由脚本负责。"
+  default_prompt: "从用户请求直接提取酒店、城市、入住起始日和采集天数；只追问缺失必填参数，参数齐全后直接执行 `scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`，禁止 `--config`、`python -c` 和内联 Python 代码。登录检查、浏览器初始化和结果导出由脚本负责。"

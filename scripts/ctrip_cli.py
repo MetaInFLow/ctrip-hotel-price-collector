@@ -126,7 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
     price.add_argument("--output-dir", type=Path, help="可选的绝对 JSON 输出目录")
 
     collect = subparsers.add_parser("collect", help="按 JSON 配置执行完整批量采集")
-    collect.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    collect.add_argument("--config", type=Path, help="高级用法：从 JSON 文件读取配置")
+    collect.add_argument("--hotel", action="append", help="酒店名称，可重复传入")
+    collect.add_argument("--city-id", default="95")
+    collect.add_argument("--start-date", help="入住起始日期 YYYY-MM-DD")
+    collect.add_argument("--days", type=int, default=1)
+    collect.add_argument("--nights", type=int, default=1)
+    collect.add_argument("--adults", type=int, default=2)
+    collect.add_argument("--children", type=int, default=0)
+    collect.add_argument("--rooms", type=int, default=1)
+    collect.add_argument("--output-dir", type=Path)
     collect.add_argument("--login-only", action="store_true")
 
     for command_parser in (login, status, search, price, collect):
@@ -342,16 +351,42 @@ def run_price(args: argparse.Namespace) -> int:
 def run_collect(args: argparse.Namespace) -> int:
     from ctrip_hotel_prices import collect_prices
 
-    config_path = args.config.expanduser().resolve()
-    try:
-        config = load_config(config_path)
-    except ValueError as exc:
-        print(f"配置错误：{exc}", file=sys.stderr)
-        return 1
+    if args.config is not None:
+        config_path = args.config.expanduser().resolve()
+        try:
+            config = load_config(config_path)
+        except ValueError as exc:
+            print(f"配置错误：{exc}", file=sys.stderr)
+            return 1
+        config_dir = config_path.parent
+    else:
+        if not args.hotel or not args.start_date:
+            print("collect 直接参数必须提供 --hotel 和 --start-date", file=sys.stderr)
+            return 1
+        config = {
+            "hotels": [{"name": name} for name in args.hotel],
+            "city_id": args.city_id,
+            "start_date": args.start_date,
+            "days": args.days,
+            "nights": args.nights,
+            "adults": args.adults,
+            "children": args.children,
+            "rooms": args.rooms,
+            "output_dir": str(
+                args.output_dir.expanduser().resolve()
+                if args.output_dir
+                else default_session_root() / "output" / "ctrip_hotel_prices"
+            ),
+            "profile_dir": str(args.profile_dir.expanduser().resolve()),
+            "detail_url_cache_file": str(
+                default_session_root() / DEFAULT_DETAIL_CACHE_NAME
+            ),
+        }
+        config_dir = Path.cwd()
     config["profile_dir"] = str(args.profile_dir.expanduser().resolve())
     return collect_prices(
         config,
-        config_dir=config_path.parent,
+        config_dir=config_dir,
         login_only=args.login_only,
     )
 

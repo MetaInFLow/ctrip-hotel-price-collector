@@ -85,6 +85,30 @@ class CliModuleTests(unittest.TestCase):
         self.assertEqual(args.page_index, 2)
         self.assertEqual(args.page_url_contains, "hotels.ctrip.com")
 
+    def test_collect_accepts_direct_business_parameters_without_config(self):
+        cli_module = load_module("ctrip_cli_direct_parameters", "ctrip_cli.py")
+        parser = cli_module.build_parser()
+
+        args = parser.parse_args(
+            [
+                "collect",
+                "--hotel",
+                "深圳湾酒店",
+                "--city-id",
+                "30",
+                "--start-date",
+                "2026-09-10",
+                "--days",
+                "7",
+            ]
+        )
+
+        self.assertIsNone(args.config)
+        self.assertEqual(args.hotel, ["深圳湾酒店"])
+        self.assertEqual(args.city_id, "30")
+        self.assertEqual(args.start_date, "2026-09-10")
+        self.assertEqual(args.days, 7)
+
     def test_collect_command_has_no_parallel_instance_override(self):
         cli_module = load_module("ctrip_cli_sequential_mode", "ctrip_cli.py")
         parser = cli_module.build_parser()

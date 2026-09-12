@@ -12,7 +12,7 @@ description: >-
 
 ## 快速执行路径
 
-用户请求包含酒店、城市、入住起始日和采集天数时，直接进入采集。只追问缺失的必填字段，不追问已有默认值的成人数、儿童数、房间数、晚数、价格模式。参数齐全后，一次性写入配置并调用 `collect --config` 。
+用户请求包含酒店、城市、入住起始日和采集天数时，直接进入采集。只追问缺失的必填字段，不追问已有默认值的成人数、儿童数、房间数、晚数、价格模式。参数齐全后，直接传入 `--hotel` 、`--city-id` 、`--start-date` 和 `--days`，不写入配置文件。
 
 - 不先调用 `login-status` 、`setup` 、`search` 或外部网页。
 - 不在 Skill 层重复做登录检查、浏览器初始化、零价复核、详情页搜索或结果解析。
@@ -22,11 +22,11 @@ description: >-
 ## 脚本执行规范
 
 - 必须直接执行现有脚本文件，不得使用 `python -c`、`python3 -c`、here-document 或内联 Python 代码替代脚本。
-- 批量采集的唯一正式命令是：
-  `/绝对路径/.venv/bin/python /绝对路径/scripts/ctrip_cli.py collect --config /绝对配置路径/ctrip_hotel_config.json`。
+- 源码态采集的正式命令是：
+  `/绝对路径/.venv/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。
 - 必须使用技能包自己的 `.venv/bin/python`；不得调用系统 Python、系统终端中的临时脚本或任意外部解释器。
-- 配置写入临时文件后，直接使用上述命令调用 `scripts/ctrip_cli.py`；不要先读取、改写或解释脚本源码。
-- 客户原生包使用 `bin/ctrip-agent collect --config <绝对配置路径>`，不调用 Python；源码态和原生包不得混用。
+- 不写入临时配置文件，直接使用上述参数命令调用 `scripts/ctrip_cli.py`；不要先读取、改写或解释脚本源码。
+- 客户原生包使用 `bin/ctrip-agent collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`，不调用 Python；源码态和原生包不得混用。
 
 ## 浏览器唯一入口
 

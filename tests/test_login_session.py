@@ -90,7 +90,7 @@ class LoginSessionTests(unittest.TestCase):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
 
         self.assertIn("## 快速执行路径", skill_text)
-        self.assertIn("一次性写入配置并调用 `collect --config`", skill_text)
+        self.assertIn("直接传入 `--hotel` 、`--city-id` 、`--start-date` 和 `--days`", skill_text)
         self.assertIn("不先调用 `login-status` 、`setup` 、`search`", skill_text)
         self.assertIn("只追问缺失的必填字段", skill_text)
 
@@ -98,11 +98,11 @@ class LoginSessionTests(unittest.TestCase):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
         metadata_text = METADATA_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("scripts/ctrip_cli.py collect --config", skill_text)
+        self.assertIn("scripts/ctrip_cli.py collect --hotel", skill_text)
         self.assertIn(".venv/bin/python", skill_text)
         self.assertIn("python -c", skill_text)
         self.assertIn("here-document", skill_text)
-        self.assertIn("scripts/ctrip_cli.py collect --config", metadata_text)
+        self.assertIn("scripts/ctrip_cli.py collect --hotel", metadata_text)
         self.assertIn("python -c", metadata_text)
 
     def test_skill_requires_cloakbrowser_script_as_the_only_browser_entrypoint(self):
