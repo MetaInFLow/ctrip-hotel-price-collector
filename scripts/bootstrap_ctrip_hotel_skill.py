@@ -13,6 +13,7 @@ from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 REQUIREMENTS_FILE = SKILL_DIR / "requirements-cloak.txt"
+MIN_PYTHON = (3, 12)
 
 
 def venv_python(venv_dir: Path, *, os_name: str | None = None) -> Path:
@@ -58,6 +59,10 @@ def parse_args(argv=None) -> argparse.Namespace:
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
+        if sys.version_info[:2] < MIN_PYTHON:
+            required = ".".join(map(str, MIN_PYTHON))
+            current = ".".join(map(str, sys.version_info[:2]))
+            raise RuntimeError(f"需要 Python {required}+ ，当前为 {current}。请从 https://www.python.org/downloads/ 安装合适版本。")
         python_bin = resolve_python(args.python)
         venv_dir = args.venv_dir.expanduser().resolve()
         print(f"使用 Python：{python_bin}", flush=True)

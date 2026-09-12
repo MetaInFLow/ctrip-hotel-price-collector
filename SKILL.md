@@ -146,13 +146,14 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 
 ## 新机部署
 
-首次运行前执行一次跨平台部署脚本。它会创建或更新 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 只由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成。
+首次运行前执行一次跨平台部署脚本。脚本会先检测本机是否有 Python 3.12+；如未检测到或版本过低，脚本会直接输出 Python 官方下载地址并停止，用户安装完成后重新运行。检测通过后才创建或更新 Python 虚拟环境，安装 CloakBrowser 与 openpyxl 依赖。Excel 只由 Python 版生成器 `scripts/ctrip_hotel_excel_builder.py` 生成。
 
 macOS/Linux：
 ```bash
-python3 /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.py \
-  --venv-dir /绝对路径/ctrip-hotel-price-collector/.venv
+bash /绝对路径/ctrip-hotel-price-collector/scripts/bootstrap_ctrip_hotel_skill.sh
 ```
+
+脚本会自动检测本机 Python。如未安装，请从 [Python 官方下载页](https://www.python.org/downloads/) 安装 3.12+后重新执行。
 
 Windows PowerShell：
 ```powershell
