@@ -109,6 +109,32 @@ class CliModuleTests(unittest.TestCase):
         self.assertEqual(args.start_date, "2026-09-10")
         self.assertEqual(args.days, 7)
 
+    def test_collect_accepts_per_hotel_date_specs_and_browser_mode(self):
+        cli_module = load_module("ctrip_cli_hotel_specs", "ctrip_cli.py")
+        parser = cli_module.build_parser()
+
+        args = parser.parse_args(
+            [
+                "collect",
+                "--hotel-spec",
+                "酒店A|2026-09-10|3|2",
+                "--browser-mode",
+                "headless",
+            ]
+        )
+
+        self.assertEqual(args.hotel_spec, ["酒店A|2026-09-10|3|2"])
+        self.assertEqual(args.browser_mode, "headless")
+        self.assertEqual(
+            cli_module._parse_hotel_spec(args.hotel_spec[0]),
+            {
+                "name": "酒店A",
+                "start_date": "2026-09-10",
+                "days": 3,
+                "nights": 2,
+            },
+        )
+
     def test_collect_command_has_no_parallel_instance_override(self):
         cli_module = load_module("ctrip_cli_sequential_mode", "ctrip_cli.py")
         parser = cli_module.build_parser()
@@ -150,6 +176,38 @@ class CliModuleTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Profile.*占用|启动失败"):
             session.open()
+
+    def test_browser_session_passes_minimized_launch_arguments(self):
+        browser_module = load_module("ctrip_cli_browser_minimized", "ctrip_cli_browser.py")
+        calls = []
+
+        class Page:
+            url = "about:blank"
+
+            def bring_to_front(self):
+                pass
+
+            def evaluate(self, _expression):
+                pass
+
+        class Browser:
+            pages = [Page()]
+
+        def launcher(profile_dir, **kwargs):
+            calls.append((profile_dir, kwargs))
+            return Browser()
+
+        session = browser_module.CtripBrowserSession(
+            "/tmp/ctrip-profile",
+            browser_mode="minimized",
+            launcher=launcher,
+        )
+        session.open()
+
+        self.assertEqual(
+            calls[0][1],
+            {"headless": False, "args": ["--start-minimized"]},
+        )
 
     def test_close_other_pages_keeps_the_selected_page(self):
         browser_module = load_module("ctrip_cli_browser_close_pages", "ctrip_cli_browser.py")

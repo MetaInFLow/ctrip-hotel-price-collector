@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,13 @@ def _add_session_options(
         default=page_url_default,
         help="优先聚焦 URL 包含此文本的页面",
     )
+    browser_default: Any = argparse.SUPPRESS if suppress_defaults else "visible"
+    parser.add_argument(
+        "--browser-mode",
+        choices=("visible", "minimized", "headless"),
+        default=browser_default,
+        help="浏览器模式：visible 可见、minimized 最小化、headless 无窗口",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,6 +136,12 @@ def build_parser() -> argparse.ArgumentParser:
     collect = subparsers.add_parser("collect", help="按 JSON 配置执行完整批量采集")
     collect.add_argument("--config", type=Path, help="高级用法：从 JSON 文件读取配置")
     collect.add_argument("--hotel", action="append", help="酒店名称，可重复传入")
+    collect.add_argument(
+        "--hotel-spec",
+        action="append",
+        metavar="酒店名|起始日期|天数|晚数",
+        help="酒店与日期绑定；例如 酒店A|2026-09-10|3|1，可重复传入",
+    )
     collect.add_argument("--city-id", default="95")
     collect.add_argument("--start-date", help="入住起始日期 YYYY-MM-DD")
     collect.add_argument("--days", type=int, default=1)
@@ -149,6 +163,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--page-index 必须是大于等于 0 的整数")
     if args.command == "search" and args.select_index is not None and args.select_index < 1:
         raise SystemExit("--select-index 必须从 1 开始")
+    if args.command == "collect" and args.browser_mode == "headless" and args.login_only:
+        raise SystemExit("--login-only 需要可见浏览器，请使用 --browser-mode visible 或 minimized")
     if args.command != "price":
         return
     if not args.hotel and not args.detail_url:
@@ -170,6 +186,7 @@ def run_login(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
+        browser_mode=getattr(args, "browser_mode", "visible"),
     ) as session:
         page = ensure_login(
             session.browser,
@@ -207,6 +224,7 @@ def run_login_status(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
+        browser_mode=getattr(args, "browser_mode", "visible"),
     ) as session:
         page = session.goto(HOME_URL)
         result = login_status(
@@ -224,6 +242,7 @@ def run_search(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
+        browser_mode=getattr(args, "browser_mode", "visible"),
     ) as session:
         page = ensure_login(session.browser, session.focus())
         if args.list_only:
@@ -279,6 +298,7 @@ def run_price(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
+        browser_mode=getattr(args, "browser_mode", "visible"),
     ) as session:
         page = ensure_login(session.browser, session.focus())
         detail_url = args.detail_url
@@ -334,18 +354,37 @@ def run_price(args: argparse.Namespace) -> int:
         ]
 
         if args.output_dir is not None:
-            output_dir = args.output_dir.expanduser().resolve()
+            output_root = args.output_dir.expanduser().resolve()
+            run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            output_dir = output_root / f"run_{run_id}"
             for payload in payloads:
                 output_path = (
                     output_dir
                     / safe_filename(payload["hotel_name"] or "hotel")
-                    / f"{payload['check_in']}_{payload['check_out']}.json"
+                    / f"{payload['check_in']}_{payload['check_out']}_{run_id}.json"
                 )
                 write_json(output_path, payload)
             print(f"已写入 {len(payloads)} 个日期结果：{output_dir}", flush=True)
         else:
             _json_print(payloads)
     return 0
+
+
+def _parse_hotel_spec(value: str) -> dict[str, Any]:
+    parts = [part.strip() for part in str(value).split("|")]
+    if len(parts) not in (2, 3, 4) or not parts[0] or not parts[1]:
+        raise ValueError(
+            "--hotel-spec 格式必须是 酒店名|起始日期|天数|晚数，天数和晚数可省略"
+        )
+    item: dict[str, Any] = {"name": parts[0], "start_date": parts[1]}
+    try:
+        if len(parts) >= 3 and parts[2]:
+            item["days"] = int(parts[2])
+        if len(parts) == 4 and parts[3]:
+            item["nights"] = int(parts[3])
+    except ValueError as exc:
+        raise ValueError("--hotel-spec 的天数和晚数必须是正整数") from exc
+    return item
 
 
 def run_collect(args: argparse.Namespace) -> int:
@@ -360,11 +399,22 @@ def run_collect(args: argparse.Namespace) -> int:
             return 1
         config_dir = config_path.parent
     else:
-        if not args.hotel or not args.start_date:
-            print("collect 直接参数必须提供 --hotel 和 --start-date", file=sys.stderr)
+        hotel_items: list[dict[str, Any]] = [{"name": name} for name in args.hotel or []]
+        try:
+            hotel_items.extend(
+                _parse_hotel_spec(value) for value in args.hotel_spec or []
+            )
+        except ValueError as exc:
+            print(f"参数错误：{exc}", file=sys.stderr)
+            return 1
+        if not hotel_items:
+            print("collect 直接参数必须提供 --hotel 或 --hotel-spec", file=sys.stderr)
+            return 1
+        if not args.start_date and any("start_date" not in item for item in hotel_items):
+            print("未绑定日期的 --hotel 必须同时提供 --start-date", file=sys.stderr)
             return 1
         config = {
-            "hotels": [{"name": name} for name in args.hotel],
+            "hotels": hotel_items,
             "city_id": args.city_id,
             "start_date": args.start_date,
             "days": args.days,
@@ -389,6 +439,7 @@ def run_collect(args: argparse.Namespace) -> int:
             "api_timeout_seconds": 45,
             "settle_ms": 1500,
             "keep_browser_open": False,
+            "browser_mode": args.browser_mode,
             "price_mode": "response",
             "show_all_rooms_xpath": DEFAULT_SHOW_ALL_ROOMS_XPATH,
             "page_price_xpath": "",
@@ -398,6 +449,7 @@ def run_collect(args: argparse.Namespace) -> int:
         }
         config_dir = Path.cwd()
     config["profile_dir"] = str(args.profile_dir.expanduser().resolve())
+    config["browser_mode"] = args.browser_mode
     return collect_prices(
         config,
         config_dir=config_dir,

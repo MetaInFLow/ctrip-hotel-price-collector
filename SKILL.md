@@ -12,7 +12,7 @@ description: >-
 
 ## 快速执行路径
 
-用户请求包含酒店、城市、入住起始日和采集天数时，直接进入采集。只追问缺失的必填字段，不追问已有默认值的成人数、儿童数、房间数、晚数、价格模式。参数齐全后，直接传入 `--hotel` 、`--city-id` 、`--start-date` 和 `--days`，不写入配置文件。
+用户请求包含酒店、城市、入住起始日和采集天数时，直接进入采集。只追问缺失的必填字段，不追问已有默认值的成人数、儿童数、房间数、晚数、价格模式。参数齐全后，直接传入 `--hotel` 、`--city-id` 、`--start-date` 和 `--days`，不写入配置文件。多个酒店可以重复传入 `--hotel`；需要给每家酒店绑定不同日期时，使用 `--hotel-spec '酒店名|起始日期|天数|晚数'` 重复传入。
 
 - 不先调用 `login-status` 、`setup` 、`search` 或外部网页。
 - 不在 Skill 层重复做登录检查、浏览器初始化、零价复核、详情页搜索或结果解析。
@@ -23,7 +23,7 @@ description: >-
 
 - 必须直接执行现有脚本文件，不得使用 `python -c`、`python3 -c`、here-document 或内联 Python 代码替代脚本。
 - 源码态采集的正式命令是：
-  `/绝对路径/.runtime/python-3.12/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。
+  `/绝对路径/.runtime/python-3.12/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。需要最小化或无窗口运行时追加 `--browser-mode minimized` 或 `--browser-mode headless`；headless 只适用于已有有效登录会话。
 - 必须使用 Skill 运行时目录中固定的 Python 3.12 虚拟环境：`<skill目录>/.runtime/python-3.12/bin/python`（Windows 为 `.runtime\\python-3.12\\Scripts\\python.exe`）；不得调用系统 Python 执行业务脚本。
 - 不写入临时配置文件，直接使用上述参数命令调用 `scripts/ctrip_cli.py`；不要先读取、改写或解释脚本源码。
 - 客户原生包使用 `bin/ctrip-agent collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`，不调用 Python；源码态和原生包不得混用。
@@ -41,7 +41,7 @@ description: >-
 - 登录态校验：复用本地持久化会话，必要时由用户在可见浏览器中手动登录。
 - 模糊选店：输入部分酒店名，点击携程搜索按钮，展示酒店候选并由用户选择；候选包含酒店名、区域和详情地址。
 - 多日期比价：按连续日期或显式入住区间采集房型、价格和接口原始 JSON；价格默认来自接口，也支持页面 XPath 模式。
-- 顺序采集：在同一个 CloakBrowser Profile 中按酒店、按日期依次执行，避免多个浏览器实例争抢资源或登录态。
+- 顺序采集：先在同一个 CloakBrowser Profile 中完成全部酒店的模糊搜索并缓存详情 URL，再按酒店、按日期依次执行，避免重复搜索和多个浏览器实例争抢资源或登录态。
 - 价格核验：接口模式可在同一页面点击“展示所有房型”并抽查页面价格，将差异写入 JSON。
 - 结果交付：生成房型明细、采集汇总、接口概览和 Excel 文件。
 - 操作边界：只执行查询、采集和导出，不执行下单、支付、取消或账号管理。
@@ -56,7 +56,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 | `login-status` | `ctrip_cli_auth.py` | 打开首页并检查当前 Profile 的登录状态 | JSON；已登录退出码为 `0`，未登录退出码为 `2` |
 | `search` | `ctrip_cli_search.py` | 输入模糊酒店名，读取有效候选；交互选择后打开详情页 | 候选列表或选中的酒店名、区域、详情 URL |
 | `price` | `ctrip_cli_price.py` | 从指定起始日期生成连续入住区间，按日期采集价格 | `response` 模式获取接口 JSON；`page_xpath` 模式读取页面 XPath 价格 |
-| `collect` | `ctrip_hotel_prices.py` | 按完整 JSON 配置执行多酒店、多日期采集并导出 Excel | 保留原批量采集能力，支持缓存、随机等待、断点索引和 Excel |
+| `collect` | `ctrip_hotel_prices.py` | 先解析全部酒店详情 URL，再执行多酒店、多日期采集并导出 Excel | 支持重复 `--hotel`、酒店级日期、URL 缓存、随机等待、断点索引和 Excel |
 
 调用示例：
 
@@ -77,6 +77,25 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
   --start-date 2026-09-06 --days 3 --price-mode response
 ```
 
+多酒店先统一解析模糊名称，再进入日期采集：
+
+```bash
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py collect \
+  --hotel 酒店A --hotel 酒店B --city-id 95 \
+  --start-date 2026-09-10 --days 3 --browser-mode minimized
+```
+
+酒店和日期一一绑定时：
+
+```bash
+/绝对路径/ctrip-hotel-price-collector/.runtime/python-3.12/bin/python \
+  /绝对路径/ctrip-hotel-price-collector/scripts/ctrip_cli.py collect \
+  --hotel-spec '酒店A|2026-09-10|3|1' \
+  --hotel-spec '酒店B|2026-09-12|2|2' \
+  --browser-mode headless
+```
+
 页面 XPath 价格示例：
 
 ```bash
@@ -94,6 +113,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - macOS 上 Playwright 直接派生 Chromium 会触发系统 Launch Services 注册崩溃；本 Skill 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再通过本机 CDP 连接回持久化 Context。Windows/Linux 继续使用 CloakBrowser 原生持久化启动。
 - CLI 通过 `--page-index` 或 `--page-url-contains` 明确选择页面；默认使用第 `0` 个页面。
 - 每次输入、点击、跳转或监听前，脚本先对目标 Page 调用 Playwright 的 `bring_to_front()`，再尽力执行 `window.focus()`。
+- `--browser-mode visible` 默认打开可见窗口；`minimized` 通过浏览器启动参数保持窗口最小化；`headless` 完全无窗口。首次登录和验证码处理必须使用 visible 或 minimized，headless 只复用已经保存的登录会话。
 - 页面导航后的登录信号允许携程完成短暂渲染切换：统一 `require_logged_in` 会持续探测，清晰的登录或登出信号稳定后才放行或失败，默认探测窗口为 15 秒。
 - 登录校验只读取本次操作重新打开并聚焦的当前 Page；成功条件是当前页“我的订单”可见且“登录”不可见。Profile 中旧 Tab 的标识不会替当前页面放行，Cookie 数量只作为诊断信息。
 - 选定酒店详情页后，脚本会关闭同一会话中的其他 Tab；命令结束时关闭整个浏览器上下文。`keep_browser_open: true` 或 `login --keep-open` 是保留窗口的显式例外；无交互终端收到 EOF 时按正常关闭处理，已保存的会话不受影响。
@@ -114,18 +134,18 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 
 ## 输入与输出
 
-- 输入：`ctrip_hotel_config.json` 或用户指定的配置文件。酒店项支持 `name`、可选 `detail_url` 和 `city_id`；日期支持连续区间或显式区间；`price_mode` 支持 `response`（默认）和 `page_xpath`。
+- 输入：`ctrip_hotel_config.json` 或用户指定的配置文件。酒店项支持 `name`、可选 `detail_url`、`city_id`、`start_date`、`days`、`nights` 和 `dates`；酒店级日期字段覆盖批次默认值。直接参数模式支持重复 `--hotel`，以及 `--hotel-spec '酒店名|起始日期|天数|晚数'`。
 - 页面价格配置：`page_price_xpath` 是页面价格元素 XPath；`show_all_rooms_xpath` 是“展示所有房型”按钮 XPath，缺省使用按按钮文字匹配的通用 XPath；`page_room_name_xpath` 可选，用于按房型名匹配接口行；`page_price_sample_size` 默认为 3，设为 0 可关闭接口模式抽查。
-- 输出：每个酒店和日期的原始 JSON、房型价格明细、采集汇总、接口概览和 `ctrip_hotel_prices.xlsx`。房型价格表包含 `价格来源`、`接口价格`、`页面价格文本`、`页面价格XPath` 和页面匹配方式。
+- 输出：每次采集创建 `output_dir/run_YYYYMMDD_HHMMSS_microseconds/` 独立目录；目录内每个日期 JSON 的文件名包含同一运行时间戳，Excel 也带同一时间戳，重复运行不会覆盖上一次结果。房型价格表包含 `价格来源`、`接口价格`、`页面价格文本`、`页面价格XPath` 和页面匹配方式。
 
 ## 核心流程
 
 1. 先读取 `ctrip_hotel_config.json` 或用户指定的 JSON 配置。
 2. 新机器先完成“新机部署”步骤，确认 Python、CloakBrowser 和 Excel 运行时可用。
-3. 运行 `scripts/ctrip_hotel_prices.py`，使用可见的持久化 CloakBrowser Profile；启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
+3. 运行 `scripts/ctrip_hotel_prices.py` 或 `scripts/ctrip_cli.py collect`，按 `browser_mode` 使用持久化 CloakBrowser Profile；启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
 4. 已有 Cookie 时，脚本先在同一 Profile 的当前 Page 内持续探测登录状态，要求 `//*[normalize-space()='我的订单']` 稳定出现且 `//span[normalize-space()='登录']` 不可见；探测失败后才点击登录入口。公共 Cookie 不会直接放行。
 5. 首次登录只在脚本启动的 CloakBrowser 窗口中由用户手动完成；脚本持续轮询当前 Page 的两个登录信号，确认登录标识稳定后才继续。
-6. 对每家酒店按以下优先级解析详情页：
+6. 先对全部酒店按以下优先级解析详情页并保存 URL，再开始任何日期采集：
    - 有 `detail_url`：直接使用配置地址，并刷新详情页缓存。
    - 无配置地址但缓存命中：复用与酒店名称、城市匹配的缓存地址。
    - 两者都没有：执行模糊选店流程。先在 `#_allSearchKeyword` 输入名称，点击 `#search_button_global`，再从 `//*[@class='search_list_hotel']` 读取候选。
@@ -134,14 +154,14 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 9. 每个日期拼接 `checkIn`、`checkOut`、`crn`、`adult`、`children` 参数，监听 `/restapi/soa2/33278/getHotelRoomListInland` 的非 `OPTIONS` 响应并保存完整 JSON。
 10. `price_mode=response` 时使用接口 `priceInfo.price` 作为最终价格；配置了 `page_price_xpath` 且抽查数量大于 0 时，在同一响应监听期间先点击 `show_all_rooms_xpath`，读取页面价格并记录接口与页面差异，抽查失败继续保留接口结果。
 11. `price_mode=page_xpath` 时必须提供 `page_price_xpath`；脚本先点击 `show_all_rooms_xpath`，读取页面价格作为最终价格，同时保留接口价格、页面原文和匹配方式。页面 XPath 命中但没有可解析数字价格时，本日期失败。
-12. 每个日期结束后立即写入结果文件和进度索引；酒店切换、日期切换和连续采集操作之间使用配置的随机等待区间。
+12. 每个日期结束后立即写入带运行时间戳的结果文件和进度索引；酒店切换、日期切换和连续采集操作之间使用配置的随机等待区间。
 13. 生成原始 JSON、房型价格明细和 Excel。失败日期写入 `.error.json`，其他日期继续执行。
 
 ## 浏览器实例生命周期
 
 - 模拟浏览器、Mideng 或其他托管浏览器的 instance 只在当前任务期间有效；任务完成、工具返回、超时或外部清理后，旧的 `browser`、`page` 和候选定位器都不可继续使用。
 - 持久化边界只有绝对路径的 `profile_dir`、`detail_url_cache_file` 和 `output_dir`。Cookie 值、页面状态、内存候选和浏览器 tab 不作为后续任务输入。
-- 任务状态写入输出目录的 `index.json`：`running` 表示执行中，`ready_for_export` 表示原始结果已落盘，`completed` 表示 Excel 已生成，`failed` 表示任务异常结束。脚本按日期增量保存，实例提前清理后可依据已落盘结果重跑。
+- 任务状态写入本次时间戳目录的 `index.json`：`running` 表示执行中，`ready_for_export` 表示原始结果已落盘，`completed` 表示 Excel 已生成，`failed` 表示任务异常结束。脚本按日期增量保存，实例提前清理后可依据已落盘结果重跑。
 - `keep_browser_open` 默认是 `false`，采集完成后自动关闭浏览器；需要人工观察时显式设置为 `true`。该配置只控制是否等待关闭，不承诺 instance 持续存在；任务完成以 `index.json` 和 Excel 文件写入成功为准。
 
 ## 项目初始化
@@ -228,7 +248,7 @@ Windows 检查命令使用 `C:\绝对路径\ctrip-hotel-price-collector\.runtime
 - Linux 详情页缓存：`/home/<系统用户名>/.local/state/ctrip-hotel-price-collector/.ctrip-hotel-detail-cache.json`
 - Linux 采集输出：`/home/<系统用户名>/.local/state/ctrip-hotel-price-collector/output/ctrip_hotel_prices`
 
-Excel 文件位于对应系统的采集输出目录下的 `ctrip_hotel_prices.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。房型价格表会标明价格来源、接口价格、页面价格原文、页面 XPath 和匹配方式；页面抽查明细保存在每日 JSON 的 `page_price_checks` 中。CloakBrowser 会从绝对 Profile 路径自动恢复 Cookie；该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
+Excel 文件位于对应系统的采集输出目录下最新一次的 `run_时间戳/ctrip_hotel_prices_时间戳.xlsx`，包含“房型价格”“采集汇总”“接口概览”“说明”四个工作表。房型价格表会标明价格来源、接口价格、页面价格原文、页面 XPath 和匹配方式；页面抽查明细保存在每日 JSON 的 `page_price_checks` 中。CloakBrowser 会从绝对 Profile 路径自动恢复 Cookie；该目录包含敏感信息，只保存在本机，不要提交、同步或分享。
 
 如果在配置中自定义 `profile_dir`、`detail_url_cache_file` 或 `output_dir`，必须填写绝对路径；脚本会拒绝相对路径。
 

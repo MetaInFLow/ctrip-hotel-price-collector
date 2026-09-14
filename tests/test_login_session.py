@@ -380,6 +380,50 @@ class LoginSessionTests(unittest.TestCase):
         self.assertTrue(Path(config["output_dir"]).is_absolute())
         self.assertFalse(config["keep_browser_open"])
 
+    def test_hotel_can_override_batch_dates(self):
+        module = load_collector_module()
+
+        stays = module.build_hotel_stays(
+            {"start_date": "2026-09-01", "days": 1, "nights": 1},
+            {
+                "name": "酒店A",
+                "start_date": "2026-09-10",
+                "days": 2,
+                "nights": 2,
+            },
+        )
+
+        self.assertEqual(
+            stays,
+            [
+                (module.date(2026, 9, 10), module.date(2026, 9, 12)),
+                (module.date(2026, 9, 11), module.date(2026, 9, 13)),
+            ],
+        )
+
+    def test_config_can_use_only_per_hotel_dates(self):
+        module = load_collector_module()
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config_path = Path(temporary_directory) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "hotels": [
+                            {
+                                "name": "酒店A",
+                                "start_date": "2026-09-10",
+                                "days": 1,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config = module.load_config(config_path)
+
+        self.assertEqual(config["hotels"][0]["start_date"], "2026-09-10")
+
     def test_sample_config_closes_browser_after_collection(self):
         config = json.loads(
             (PROJECT_ROOT / "ctrip_hotel_config.json").read_text(encoding="utf-8")

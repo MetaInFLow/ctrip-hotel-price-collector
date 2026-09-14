@@ -12,6 +12,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ctrip_hotel_prices import (  # noqa: E402
+    BROWSER_MODES,
     DEFAULT_PROFILE_NAME,
     close_browser_safely,
     default_session_root,
@@ -48,7 +49,7 @@ def select_page(
 
 
 class CtripBrowserSession:
-    """One visible persistent browser session with an explicit focused page."""
+    """One persistent browser session with an explicit focused page."""
 
     def __init__(
         self,
@@ -56,6 +57,7 @@ class CtripBrowserSession:
         *,
         page_index: int = 0,
         url_contains: str = "",
+        browser_mode: str = "visible",
         launcher: Callable[..., Any] | None = None,
     ) -> None:
         default_path = default_session_root() / DEFAULT_PROFILE_NAME
@@ -65,6 +67,11 @@ class CtripBrowserSession:
         )
         self.page_index = page_index
         self.url_contains = url_contains
+        if browser_mode not in BROWSER_MODES:
+            raise ValueError(
+                "browser_mode 必须是 visible、minimized 或 headless 之一"
+            )
+        self.browser_mode = browser_mode
         self.launcher = launcher
         self.browser: Any | None = None
         self.page: Any | None = None
@@ -82,7 +89,12 @@ class CtripBrowserSession:
                 ) from exc
             launcher = launch_persistent_context
         try:
-            self.browser = launcher(str(self.profile_dir), headless=False)
+            launch_kwargs: dict[str, Any] = {
+                "headless": self.browser_mode == "headless",
+            }
+            if self.browser_mode == "minimized":
+                launch_kwargs["args"] = ["--start-minimized"]
+            self.browser = launcher(str(self.profile_dir), **launch_kwargs)
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "缺少 CloakBrowser 依赖，请先执行新机部署脚本。"

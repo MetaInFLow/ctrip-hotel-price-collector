@@ -57,6 +57,7 @@ PRICE_MODE_ALIASES = {
     "page_xpath": "page_xpath",
     "xpath": "page_xpath",
 }
+BROWSER_MODES = {"visible", "minimized", "headless"}
 PAGE_PRICE_PATTERN = re.compile(
     r"(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\d.])"
 )
@@ -105,6 +106,14 @@ def normalize_price_mode(value: Any) -> str:
     return normalized
 
 
+def normalize_browser_mode(value: Any) -> str:
+    mode = str(value or "visible").strip().lower()
+    if mode not in BROWSER_MODES:
+        allowed = ", ".join(sorted(BROWSER_MODES))
+        raise ValueError(f"browser_mode 必须是 {allowed} 之一：{value}")
+    return mode
+
+
 def normalize_xpath_selector(
     value: Any,
     field_name: str,
@@ -120,6 +129,7 @@ def normalize_xpath_selector(
 
 
 def validate_price_config(config: dict[str, Any]) -> None:
+    config["browser_mode"] = normalize_browser_mode(config.get("browser_mode", "visible"))
     config["price_mode"] = normalize_price_mode(config.get("price_mode", "response"))
     config["show_all_rooms_xpath"] = normalize_xpath_selector(
         config.get("show_all_rooms_xpath", DEFAULT_SHOW_ALL_ROOMS_XPATH),
@@ -195,6 +205,27 @@ def build_stays(config: dict[str, Any]) -> list[tuple[date, date]]:
         )
         for offset in range(days)
     ]
+
+
+def hotel_stay_config(config: dict[str, Any], hotel: dict[str, Any]) -> dict[str, Any]:
+    """Overlay optional per-hotel date fields on the batch defaults."""
+
+    merged = dict(config)
+    if "dates" in hotel:
+        merged.pop("start_date", None)
+        merged.pop("days", None)
+        merged.pop("nights", None)
+        merged["dates"] = hotel["dates"]
+    elif any(field_name in hotel for field_name in ("start_date", "days", "nights")):
+        merged.pop("dates", None)
+        for field_name in ("start_date", "days", "nights"):
+            if field_name in hotel:
+                merged[field_name] = hotel[field_name]
+    return merged
+
+
+def build_hotel_stays(config: dict[str, Any], hotel: dict[str, Any]) -> list[tuple[date, date]]:
+    return build_stays(hotel_stay_config(config, hotel))
 
 
 def build_detail_url(
@@ -307,7 +338,14 @@ def load_config(path: Path) -> dict[str, Any]:
         normalized["random_sleep_max_seconds"],
         sleeper=lambda _delay: None,
     )
-    build_stays(normalized)
+    has_global_dates = any(
+        field_name in normalized for field_name in ("dates", "start_date")
+    )
+    if has_global_dates:
+        build_stays(normalized)
+    else:
+        for hotel in normalized_hotels:
+            build_hotel_stays(normalized, hotel)
     return normalized
 
 
@@ -1534,12 +1572,19 @@ def collect_prices(
     profile_dir = resolve_profile_dir(config, config_dir)
     detail_url_cache_path = resolve_detail_url_cache_path(config, config_dir)
     detail_url_cache = load_detail_url_cache(detail_url_cache_path)
+    browser_mode = normalize_browser_mode(config.get("browser_mode", "visible"))
     price_mode = config["price_mode"]
     profile_exists = profile_dir.exists()
-    stays = build_stays(config)
+    try:
+        hotel_stays = [build_hotel_stays(config, hotel) for hotel in config["hotels"]]
+    except ValueError as exc:
+        print(f"配置错误：{exc}", file=sys.stderr)
+        return 1
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    run_output_dir = output_dir / f"run_{run_id}"
     browser = None
     summary: list[dict[str, Any]] = []
-    index_path = output_dir / "index.json"
+    index_path = run_output_dir / "index.json"
     operation_started = False
 
     def checkpoint(status: str, error: str | None = None) -> None:
@@ -1583,23 +1628,40 @@ def collect_prices(
             print(f"发现本地会话目录，先校验登录状态：{profile_dir}", flush=True)
         else:
             print(f"未发现本地会话目录，将在首次登录后保存：{profile_dir}", flush=True)
-        browser = launch_persistent_context(str(profile_dir), headless=False)
+        if browser_mode == "headless" and not profile_exists:
+            raise RuntimeError(
+                "headless 模式要求先有可复用的本地登录会话；"
+                "首次登录请使用 --browser-mode visible 或 minimized。"
+            )
+        launch_kwargs: dict[str, Any] = {
+            "headless": browser_mode == "headless",
+        }
+        if browser_mode == "minimized":
+            launch_kwargs["args"] = ["--start-minimized"]
+        browser = launch_persistent_context(str(profile_dir), **launch_kwargs)
         cookie_count = count_ctrip_cookies(browser)
         if cookie_count:
             print(f"已加载本地携程 Cookie（{cookie_count} 个），正在验证登录状态。", flush=True)
         else:
             print("本地未加载到携程 Cookie，等待手动登录。", flush=True)
+        if browser_mode == "headless" and cookie_count == 0:
+            raise RuntimeError(
+                "headless 模式没有检测到携程 Cookie；请先用 visible 或 minimized 模式完成登录。"
+            )
         page = browser.pages[0] if browser.pages else browser.new_page()
         page = focus_page(page)
         page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
-        page = wait_for_login(
-            browser,
-            page,
-            float(config["login_timeout_seconds"]),
-            session_probe_seconds=float(config["session_probe_seconds"]),
-            has_persisted_cookies=cookie_count > 0,
-        )
-        page = require_logged_in(browser, page, operation="酒店价格采集")
+        if browser_mode == "headless":
+            page = require_logged_in(browser, page, operation="headless 酒店价格采集")
+        else:
+            page = wait_for_login(
+                browser,
+                page,
+                float(config["login_timeout_seconds"]),
+                session_probe_seconds=float(config["session_probe_seconds"]),
+                has_persisted_cookies=cookie_count > 0,
+            )
+            page = require_logged_in(browser, page, operation="酒店价格采集")
         checkpoint("running")
 
         if login_only:
@@ -1611,7 +1673,9 @@ def collect_prices(
                     pass
             return 0
 
-        for hotel in config["hotels"]:
+        resolved_hotels: list[dict[str, Any]] = []
+        print("开始预解析全部酒店详情页，完成后再进入日期采集。", flush=True)
+        for hotel, stays in zip(config["hotels"], hotel_stays):
             hotel_name = str(hotel["name"]).strip()
             print(f"\n开始处理：{hotel_name}", flush=True)
             wait_between_operations(f"处理酒店 {hotel_name}")
@@ -1631,6 +1695,26 @@ def collect_prices(
                 print(f"使用配置中的详情页：{detail_url}", flush=True)
             save_detail_url_cache(detail_url_cache_path, detail_url_cache)
             checkpoint("running")
+            resolved_hotels.append(
+                {
+                    "hotel": hotel,
+                    "hotel_name": hotel_name,
+                    "city_id": city_id,
+                    "detail_page": page,
+                    "detail_url": detail_url,
+                    "detail_source": detail_source,
+                    "stays": stays,
+                }
+            )
+
+        print("全部酒店详情页已解析，开始按酒店和日期采集。", flush=True)
+        for resolved in resolved_hotels:
+            hotel = resolved["hotel"]
+            hotel_name = resolved["hotel_name"]
+            city_id = resolved["city_id"]
+            page = resolved["detail_page"]
+            detail_url = resolved["detail_url"]
+            stays = resolved["stays"]
 
             for check_in, check_out in stays:
                 wait_between_operations(f"抓取日期 {check_in.isoformat()}")
@@ -1645,9 +1729,9 @@ def collect_prices(
                     city_id=city_id,
                 )
                 file_path = (
-                    output_dir
+                    run_output_dir
                     / safe_filename(hotel_name)
-                    / f"{check_in.isoformat()}_{check_out.isoformat()}.json"
+                    / f"{check_in.isoformat()}_{check_out.isoformat()}_{run_id}.json"
                 )
                 print(
                     f"抓取 {check_in.isoformat()} 至 {check_out.isoformat()}...",
@@ -1655,7 +1739,7 @@ def collect_prices(
                 )
                 try:
                     collection = capture_room_data(
-                        detail_page,
+                        page,
                         target_url,
                         browser=browser,
                         api_timeout_seconds=float(config["api_timeout_seconds"]),
@@ -1794,8 +1878,8 @@ def collect_prices(
         ok_count = sum(item["status"] == "ok" for item in summary)
         print(f"\n处理完成：{ok_count}/{len(summary)} 个日期成功。", flush=True)
         print(f"汇总文件：{index_path}", flush=True)
-        excel_path = output_dir / "ctrip_hotel_prices.xlsx"
-        excel_exported = export_excel(output_dir, excel_path)
+        excel_path = run_output_dir / f"ctrip_hotel_prices_{run_id}.xlsx"
+        excel_exported = export_excel(run_output_dir, excel_path)
         if excel_exported:
             print(f"Excel 文件：{excel_path}", flush=True)
             checkpoint("completed")
@@ -1811,8 +1895,8 @@ def collect_prices(
     except Exception as exc:
         checkpoint("failed", str(exc))
         if summary:
-            partial_excel_path = output_dir / "ctrip_hotel_prices.xlsx"
-            if export_excel(output_dir, partial_excel_path):
+            partial_excel_path = run_output_dir / f"ctrip_hotel_prices_{run_id}.xlsx"
+            if export_excel(run_output_dir, partial_excel_path):
                 print(f"已根据已落盘结果生成部分 Excel：{partial_excel_path}", flush=True)
         print(f"采集失败：{exc}", file=sys.stderr)
         return 1
@@ -1833,6 +1917,11 @@ def parse_args() -> argparse.Namespace:
         "--login-only",
         action="store_true",
         help="只打开并保存登录会话，不执行酒店采集",
+    )
+    parser.add_argument(
+        "--browser-mode",
+        choices=tuple(sorted(BROWSER_MODES)),
+        help="浏览器模式：visible 可见、minimized 最小化、headless 无窗口",
     )
     parser.add_argument(
         "--price-mode",
@@ -1869,6 +1958,8 @@ def main() -> int:
         return 1
     if args.price_mode is not None:
         config["price_mode"] = args.price_mode
+    if args.browser_mode is not None:
+        config["browser_mode"] = args.browser_mode
     if args.show_all_rooms_xpath is not None:
         config["show_all_rooms_xpath"] = args.show_all_rooms_xpath
     if args.page_price_xpath is not None:
