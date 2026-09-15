@@ -419,6 +419,16 @@ class LoginSessionTests(unittest.TestCase):
 
         self.assertEqual(selected["name"], "峨眉山景区智选假日酒店")
 
+    def test_headless_hotel_selection_fails_closed_for_unrelated_candidate(self):
+        module = load_collector_module()
+
+        with self.assertRaisesRegex(ValueError, "匹配不够明确"):
+            module.choose_hotel_candidate(
+                [{"name": "山禾悦私汤度假别院（峨眉山报国寺店）"}],
+                keyword="月漫山禾厂日落晚惠（峨眉山零公里店）",
+                automatic=True,
+            )
+
     def test_config_can_use_only_per_hotel_dates(self):
         module = load_collector_module()
 

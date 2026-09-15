@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import random
@@ -724,10 +725,29 @@ def choose_hotel_candidate(
     if not candidates:
         raise ValueError("没有可选择的酒店候选")
     if automatic:
-        selected = max(
+        ranked = sorted(
             enumerate(candidates),
             key=lambda item: _hotel_candidate_score(item[1], keyword, item[0]),
-        )[1]
+            reverse=True,
+        )
+        selected_index, selected = ranked[0]
+        selected_confidence = _hotel_candidate_confidence(selected, keyword)
+        second_confidence = (
+            _hotel_candidate_confidence(ranked[1][1], keyword)
+            if len(ranked) > 1
+            else 0.0
+        )
+        if selected_confidence < 0.72 or (
+            len(ranked) > 1 and selected_confidence - second_confidence < 0.08
+        ):
+            options = "；".join(
+                f"{index + 1}. {candidate['name']}"
+                for index, candidate in ranked[:5]
+            )
+            raise ValueError(
+                f"headless 模糊匹配不够明确，未自动选择“{keyword}”。候选：{options}；"
+                "请提供准确酒店名或 detail_url 后重试。"
+            )
         print(
             f"headless 模式自动选择酒店候选：{selected['name']}"
             f"（{selected.get('district') or '未知区域'}）",
@@ -780,6 +800,26 @@ def _hotel_candidate_score(
         match_score = 100 + len(query_tokens & name_tokens) * 10
     exact_length_score = -abs(len(name) - len(query))
     return match_score, exact_length_score, -position
+
+
+def _hotel_match_key(value: Any) -> str:
+    return re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "", str(value or "")).lower()
+
+
+def _hotel_candidate_confidence(candidate: dict[str, Any], keyword: str) -> float:
+    query = _hotel_match_key(keyword)
+    name = _hotel_match_key(candidate.get("name", ""))
+    if not query or not name:
+        return 0.0
+    if query == name:
+        return 1.0
+    if query in name:
+        return len(query) / len(name)
+    if name in query:
+        return len(name) / len(query)
+    ratio = difflib.SequenceMatcher(None, query, name).ratio()
+    overlap = len(set(query) & set(name)) / max(len(set(query)), 1)
+    return ratio * 0.6 + overlap * 0.4
 
 
 def search_hotel(
