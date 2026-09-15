@@ -401,6 +401,24 @@ class LoginSessionTests(unittest.TestCase):
             ],
         )
 
+    def test_headless_hotel_selection_uses_best_name_match_without_input(self):
+        module = load_collector_module()
+        candidates = [
+            {"name": "峨眉山景区智选假日酒店", "district": "峨眉山"},
+            {"name": "峨眉山景区智选假日酒店（零公寓）", "district": "峨眉山"},
+        ]
+
+        selected = module.choose_hotel_candidate(
+            candidates,
+            keyword="峨眉山景区智选假日酒店",
+            automatic=True,
+            input_fn=lambda _prompt: (_ for _ in ()).throw(
+                AssertionError("headless 模式不应读取输入")
+            ),
+        )
+
+        self.assertEqual(selected["name"], "峨眉山景区智选假日酒店")
+
     def test_config_can_use_only_per_hotel_dates(self):
         module = load_collector_module()
 

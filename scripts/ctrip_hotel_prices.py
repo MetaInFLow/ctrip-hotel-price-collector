@@ -129,7 +129,8 @@ def normalize_xpath_selector(
 
 
 def validate_price_config(config: dict[str, Any]) -> None:
-    config["browser_mode"] = normalize_browser_mode(config.get("browser_mode", "visible"))
+    if "browser_mode" in config:
+        config["browser_mode"] = normalize_browser_mode(config["browser_mode"])
     config["price_mode"] = normalize_price_mode(config.get("price_mode", "response"))
     config["show_all_rooms_xpath"] = normalize_xpath_selector(
         config.get("show_all_rooms_xpath", DEFAULT_SHOW_ALL_ROOMS_XPATH),
@@ -717,9 +718,22 @@ def choose_hotel_candidate(
     candidates: list[dict[str, Any]],
     *,
     input_fn: Any = input,
+    keyword: str = "",
+    automatic: bool = False,
 ) -> dict[str, Any]:
     if not candidates:
         raise ValueError("没有可选择的酒店候选")
+    if automatic:
+        selected = max(
+            enumerate(candidates),
+            key=lambda item: _hotel_candidate_score(item[1], keyword, item[0]),
+        )[1]
+        print(
+            f"headless 模式自动选择酒店候选：{selected['name']}"
+            f"（{selected.get('district') or '未知区域'}）",
+            flush=True,
+        )
+        return selected
     if len(candidates) == 1:
         selected_index = 0
     else:
@@ -745,6 +759,29 @@ def choose_hotel_candidate(
     return candidates[selected_index]
 
 
+def _hotel_candidate_score(
+    candidate: dict[str, Any],
+    keyword: str,
+    position: int,
+) -> tuple[int, int, int]:
+    """Rank fuzzy candidates deterministically when no interactive UI exists."""
+
+    query = normalized_text(keyword)
+    name = normalized_text(candidate.get("name", ""))
+    if name == query and query:
+        match_score = 300
+    elif query and query in name:
+        match_score = 200
+    elif name and name in query:
+        match_score = 150
+    else:
+        query_tokens = set(query.split())
+        name_tokens = set(name.split())
+        match_score = 100 + len(query_tokens & name_tokens) * 10
+    exact_length_score = -abs(len(name) - len(query))
+    return match_score, exact_length_score, -position
+
+
 def search_hotel(
     browser: Any,
     page: Any,
@@ -752,6 +789,7 @@ def search_hotel(
     *,
     timeout_seconds: float,
     input_fn: Any = input,
+    automatic: bool = False,
 ) -> tuple[Any, str]:
     page = require_logged_in(browser, page, operation="酒店模糊搜索")
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
@@ -782,7 +820,12 @@ def search_hotel(
             timeout_seconds,
             browser=browser,
         )
-    selected_candidate = choose_hotel_candidate(candidates, input_fn=input_fn)
+    selected_candidate = choose_hotel_candidate(
+        candidates,
+        input_fn=input_fn,
+        keyword=hotel_name,
+        automatic=automatic,
+    )
     selected_hotel_name = str(selected_candidate["name"])
     selected_page = selected_candidate.get("page", page)
     focus_page(selected_page)
@@ -1572,7 +1615,9 @@ def collect_prices(
     profile_dir = resolve_profile_dir(config, config_dir)
     detail_url_cache_path = resolve_detail_url_cache_path(config, config_dir)
     detail_url_cache = load_detail_url_cache(detail_url_cache_path)
-    browser_mode = normalize_browser_mode(config.get("browser_mode", "visible"))
+    browser_mode = normalize_browser_mode(
+        config.get("browser_mode", "visible" if login_only else "headless")
+    )
     price_mode = config["price_mode"]
     profile_exists = profile_dir.exists()
     try:
@@ -1675,6 +1720,22 @@ def collect_prices(
 
         resolved_hotels: list[dict[str, Any]] = []
         print("开始预解析全部酒店详情页，完成后再进入日期采集。", flush=True)
+
+        def resolve_search(
+            search_browser: Any,
+            current_page: Any,
+            hotel_name: str,
+            *,
+            timeout_seconds: float,
+        ) -> tuple[Any, str]:
+            return search_hotel(
+                search_browser,
+                current_page,
+                hotel_name,
+                timeout_seconds=timeout_seconds,
+                automatic=browser_mode == "headless",
+            )
+
         for hotel, stays in zip(config["hotels"], hotel_stays):
             hotel_name = str(hotel["name"]).strip()
             print(f"\n开始处理：{hotel_name}", flush=True)
@@ -1687,6 +1748,7 @@ def collect_prices(
                 config=config,
                 detail_url_cache=detail_url_cache,
                 timeout_seconds=float(config["search_timeout_seconds"]),
+                search_hotel_fn=resolve_search,
             )
             page = detail_page
             close_other_pages(browser, page)

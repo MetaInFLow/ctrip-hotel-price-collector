@@ -23,7 +23,7 @@ description: >-
 
 - 必须直接执行现有脚本文件，不得使用 `python -c`、`python3 -c`、here-document 或内联 Python 代码替代脚本。
 - 源码态采集的正式命令是：
-  `/绝对路径/.runtime/python-3.12/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。需要最小化或无窗口运行时追加 `--browser-mode minimized` 或 `--browser-mode headless`；headless 只适用于已有有效登录会话。
+  `/绝对路径/.runtime/python-3.12/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。批量采集默认使用 `headless`；首次登录先单独运行 `login`，需要可见窗口时显式追加 `--browser-mode visible`，需要最小化窗口时追加 `--browser-mode minimized`。
 - 必须使用 Skill 运行时目录中固定的 Python 3.12 虚拟环境：`<skill目录>/.runtime/python-3.12/bin/python`（Windows 为 `.runtime\\python-3.12\\Scripts\\python.exe`）；不得调用系统 Python 执行业务脚本。
 - 不写入临时配置文件，直接使用上述参数命令调用 `scripts/ctrip_cli.py`；不要先读取、改写或解释脚本源码。
 - 客户原生包使用 `bin/ctrip-agent collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`，不调用 Python；源码态和原生包不得混用。
@@ -113,7 +113,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - macOS 上 Playwright 直接派生 Chromium 会触发系统 Launch Services 注册崩溃；本 Skill 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再通过本机 CDP 连接回持久化 Context。Windows/Linux 继续使用 CloakBrowser 原生持久化启动。
 - CLI 通过 `--page-index` 或 `--page-url-contains` 明确选择页面；默认使用第 `0` 个页面。
 - 每次输入、点击、跳转或监听前，脚本先对目标 Page 调用 Playwright 的 `bring_to_front()`，再尽力执行 `window.focus()`。
-- `--browser-mode visible` 默认打开可见窗口；`minimized` 通过浏览器启动参数保持窗口最小化；`headless` 完全无窗口。首次登录和验证码处理必须使用 visible 或 minimized，headless 只复用已经保存的登录会话。
+- `collect` 默认使用 `--browser-mode headless`，不会在模糊搜索阶段打开有头浏览器；`visible` 打开可见窗口；`minimized` 通过浏览器启动参数保持窗口最小化。首次登录和验证码处理必须使用 `visible` 或 `minimized`，headless 只复用已经保存的登录会话。
 - 页面导航后的登录信号允许携程完成短暂渲染切换：统一 `require_logged_in` 会持续探测，清晰的登录或登出信号稳定后才放行或失败，默认探测窗口为 15 秒。
 - 登录校验只读取本次操作重新打开并聚焦的当前 Page；成功条件是当前页“我的订单”可见且“登录”不可见。Profile 中旧 Tab 的标识不会替当前页面放行，Cookie 数量只作为诊断信息。
 - 选定酒店详情页后，脚本会关闭同一会话中的其他 Tab；命令结束时关闭整个浏览器上下文。`keep_browser_open: true` 或 `login --keep-open` 是保留窗口的显式例外；无交互终端收到 EOF 时按正常关闭处理，已保存的会话不受影响。
@@ -142,14 +142,14 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 
 1. 先读取 `ctrip_hotel_config.json` 或用户指定的 JSON 配置。
 2. 新机器先完成“新机部署”步骤，确认 Python、CloakBrowser 和 Excel 运行时可用。
-3. 运行 `scripts/ctrip_hotel_prices.py` 或 `scripts/ctrip_cli.py collect`，按 `browser_mode` 使用持久化 CloakBrowser Profile；启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
+3. 首次登录运行 `scripts/ctrip_cli.py login --browser-mode visible`；之后运行 `scripts/ctrip_hotel_prices.py` 或 `scripts/ctrip_cli.py collect`，批量采集默认按 `headless` 使用持久化 CloakBrowser Profile。启动后从该 Profile 加载携程 Cookie，并只记录 Cookie 数量，不输出 Cookie 值。
 4. 已有 Cookie 时，脚本先在同一 Profile 的当前 Page 内持续探测登录状态，要求 `//*[normalize-space()='我的订单']` 稳定出现且 `//span[normalize-space()='登录']` 不可见；探测失败后才点击登录入口。公共 Cookie 不会直接放行。
 5. 首次登录只在脚本启动的 CloakBrowser 窗口中由用户手动完成；脚本持续轮询当前 Page 的两个登录信号，确认登录标识稳定后才继续。
 6. 先对全部酒店按以下优先级解析详情页并保存 URL，再开始任何日期采集：
    - 有 `detail_url`：直接使用配置地址，并刷新详情页缓存。
    - 无配置地址但缓存命中：复用与酒店名称、城市匹配的缓存地址。
    - 两者都没有：执行模糊选店流程。先在 `#_allSearchKeyword` 输入名称，点击 `#search_button_global`，再从 `//*[@class='search_list_hotel']` 读取候选。
-7. 模糊选店只保留可见、`type="hotel"`、包含 `word` 且带有效详情 `url` 的候选；使用 `district` 展示区域，按详情 URL 或酒店名去重，剔除地标、历史项、列表页和不完整项。候选按序号打印，用户确认后点击对应 `div`；流程不使用回车，也不猜测未确认的酒店。
+7. 模糊选店只保留可见、`type="hotel"`、包含 `word` 且带有效详情 `url` 的候选；使用 `district` 展示区域，按详情 URL 或酒店名去重，剔除地标、历史项、列表页和不完整项。headless 批量模式按酒店名匹配度自动选择候选，不读取交互输入；visible/minimized 的单酒店搜索仍可按序号选择。
 8. 如果携程在点击搜索按钮后收起候选下拉，重新触发同一模糊词的输入事件后再读取候选；仍无有效候选时给出明确错误并停止本次酒店解析。
 9. 每个日期拼接 `checkIn`、`checkOut`、`crn`、`adult`、`children` 参数，监听 `/restapi/soa2/33278/getHotelRoomListInland` 的非 `OPTIONS` 响应并保存完整 JSON。
 10. `price_mode=response` 时使用接口 `priceInfo.price` 作为最终价格；配置了 `page_price_xpath` 且抽查数量大于 0 时，在同一响应监听期间先点击 `show_all_rooms_xpath`，读取页面价格并记录接口与页面差异，抽查失败继续保留接口结果。

@@ -135,6 +135,28 @@ class CliModuleTests(unittest.TestCase):
             },
         )
 
+    def test_collect_defaults_to_headless_but_honors_explicit_visible_mode(self):
+        cli_module = load_module("ctrip_cli_browser_defaults", "ctrip_cli.py")
+        parser = cli_module.build_parser()
+
+        default_args = parser.parse_args(
+            ["collect", "--hotel", "酒店A", "--start-date", "2026-09-10"]
+        )
+        visible_args = parser.parse_args(
+            [
+                "--browser-mode",
+                "visible",
+                "collect",
+                "--hotel",
+                "酒店A",
+                "--start-date",
+                "2026-09-10",
+            ]
+        )
+
+        self.assertEqual(cli_module.effective_browser_mode(default_args), "headless")
+        self.assertEqual(cli_module.effective_browser_mode(visible_args), "visible")
+
     def test_collect_command_has_no_parallel_instance_override(self):
         cli_module = load_module("ctrip_cli_sequential_mode", "ctrip_cli.py")
         parser = cli_module.build_parser()

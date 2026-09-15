@@ -81,7 +81,7 @@ def _add_session_options(
         default=page_url_default,
         help="优先聚焦 URL 包含此文本的页面",
     )
-    browser_default: Any = argparse.SUPPRESS if suppress_defaults else "visible"
+    browser_default: Any = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument(
         "--browser-mode",
         choices=("visible", "minimized", "headless"),
@@ -163,7 +163,11 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--page-index 必须是大于等于 0 的整数")
     if args.command == "search" and args.select_index is not None and args.select_index < 1:
         raise SystemExit("--select-index 必须从 1 开始")
-    if args.command == "collect" and args.browser_mode == "headless" and args.login_only:
+    if (
+        args.command == "collect"
+        and effective_browser_mode(args) == "headless"
+        and args.login_only
+    ):
         raise SystemExit("--login-only 需要可见浏览器，请使用 --browser-mode visible 或 minimized")
     if args.command != "price":
         return
@@ -177,6 +181,15 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--output-dir 必须使用绝对路径")
 
 
+def effective_browser_mode(args: argparse.Namespace) -> str:
+    explicit_mode = getattr(args, "browser_mode", None)
+    if explicit_mode:
+        return explicit_mode
+    if getattr(args, "command", "") == "collect":
+        return "visible" if getattr(args, "login_only", False) else "headless"
+    return "visible"
+
+
 def _json_print(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, default=str), flush=True)
 
@@ -186,7 +199,7 @@ def run_login(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
-        browser_mode=getattr(args, "browser_mode", "visible"),
+        browser_mode=effective_browser_mode(args),
     ) as session:
         page = ensure_login(
             session.browser,
@@ -224,7 +237,7 @@ def run_login_status(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
-        browser_mode=getattr(args, "browser_mode", "visible"),
+        browser_mode=effective_browser_mode(args),
     ) as session:
         page = session.goto(HOME_URL)
         result = login_status(
@@ -242,7 +255,7 @@ def run_search(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
-        browser_mode=getattr(args, "browser_mode", "visible"),
+        browser_mode=effective_browser_mode(args),
     ) as session:
         page = ensure_login(session.browser, session.focus())
         if args.list_only:
@@ -261,6 +274,7 @@ def run_search(args: argparse.Namespace) -> int:
             args.keyword,
             timeout_seconds=args.timeout,
             index=args.select_index,
+            automatic=effective_browser_mode(args) == "headless",
         )
         close_other_pages(session.browser, detail_page)
         session.focus(detail_page)
@@ -298,7 +312,7 @@ def run_price(args: argparse.Namespace) -> int:
         args.profile_dir,
         page_index=args.page_index,
         url_contains=args.page_url_contains,
-        browser_mode=getattr(args, "browser_mode", "visible"),
+        browser_mode=effective_browser_mode(args),
     ) as session:
         page = ensure_login(session.browser, session.focus())
         detail_url = args.detail_url
@@ -317,6 +331,7 @@ def run_price(args: argparse.Namespace) -> int:
                     current_page,
                     name,
                     timeout_seconds=timeout_seconds,
+                    automatic=effective_browser_mode(args) == "headless",
                 )
                 return searched_page, selected["url"]
 
@@ -439,7 +454,7 @@ def run_collect(args: argparse.Namespace) -> int:
             "api_timeout_seconds": 45,
             "settle_ms": 1500,
             "keep_browser_open": False,
-            "browser_mode": args.browser_mode,
+            "browser_mode": effective_browser_mode(args),
             "price_mode": "response",
             "show_all_rooms_xpath": DEFAULT_SHOW_ALL_ROOMS_XPATH,
             "page_price_xpath": "",
@@ -449,7 +464,7 @@ def run_collect(args: argparse.Namespace) -> int:
         }
         config_dir = Path.cwd()
     config["profile_dir"] = str(args.profile_dir.expanduser().resolve())
-    config["browser_mode"] = args.browser_mode
+    config["browser_mode"] = effective_browser_mode(args)
     return collect_prices(
         config,
         config_dir=config_dir,

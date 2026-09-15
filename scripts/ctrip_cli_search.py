@@ -81,12 +81,19 @@ def select_candidate(
     index: int | None = None,
     input_fn: Any = input,
     timeout_seconds: float = 45,
+    automatic: bool = False,
+    keyword: str = "",
 ) -> tuple[Any, dict[str, Any]]:
     """Select one 1-based candidate and wait for its detail page."""
 
     page = require_logged_in(browser, page, operation="酒店候选选择")
     if index is None:
-        selected = choose_hotel_candidate(candidates, input_fn=input_fn)
+        selected = choose_hotel_candidate(
+            candidates,
+            input_fn=input_fn,
+            keyword=keyword,
+            automatic=automatic,
+        )
     else:
         if index < 1 or index > len(candidates):
             raise ValueError(f"酒店序号必须在 1 到 {len(candidates)} 之间")
@@ -125,6 +132,7 @@ def fuzzy_search_hotel(
     timeout_seconds: float = 45,
     index: int | None = None,
     input_fn: Any = input,
+    automatic: bool = False,
 ) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
     """Search, list, select and open one hotel detail page."""
 
@@ -141,6 +149,8 @@ def fuzzy_search_hotel(
         index=index,
         input_fn=input_fn,
         timeout_seconds=timeout_seconds,
+        automatic=automatic,
+        keyword=keyword,
     )
     return detail_page, selected, candidates
 
