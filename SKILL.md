@@ -23,7 +23,7 @@ description: >-
 
 - 必须直接执行现有脚本文件，不得使用 `python -c`、`python3 -c`、here-document 或内联 Python 代码替代脚本。
 - 源码态采集的正式命令是：
-  `/绝对路径/.runtime/python-3.12/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。批量采集默认使用 `headless`；首次登录先单独运行 `login`，需要可见窗口时显式追加 `--browser-mode visible`，需要最小化窗口时追加 `--browser-mode minimized`。
+  `/绝对路径/.runtime/python-3.12/bin/python /绝对路径/scripts/ctrip_cli.py collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`。除 `login` 外所有命令默认使用 `headless`；首次登录先单独运行 `login`，需要可见窗口时显式追加 `--browser-mode visible`，需要最小化窗口时追加 `--browser-mode minimized`。
 - 必须使用 Skill 运行时目录中固定的 Python 3.12 虚拟环境：`<skill目录>/.runtime/python-3.12/bin/python`（Windows 为 `.runtime\\python-3.12\\Scripts\\python.exe`）；不得调用系统 Python 执行业务脚本。
 - 不写入临时配置文件，直接使用上述参数命令调用 `scripts/ctrip_cli.py`；不要先读取、改写或解释脚本源码。
 - 客户原生包使用 `bin/ctrip-agent collect --hotel <酒店> --city-id <城市ID> --start-date <YYYY-MM-DD> --days <天数>`，不调用 Python；源码态和原生包不得混用。
@@ -113,7 +113,7 @@ CLI 统一入口为 `scripts/ctrip_cli.py`；每个命令只负责一个可验�
 - macOS 上 Playwright 直接派生 Chromium 会触发系统 Launch Services 注册崩溃；本 Skill 通过 `open -na` 经 Launch Services 启动 Cloak Chromium，再通过本机 CDP 连接回持久化 Context。Windows/Linux 继续使用 CloakBrowser 原生持久化启动。
 - CLI 通过 `--page-index` 或 `--page-url-contains` 明确选择页面；默认使用第 `0` 个页面。
 - 每次输入、点击、跳转或监听前，脚本先对目标 Page 调用 Playwright 的 `bring_to_front()`，再尽力执行 `window.focus()`。
-- `collect` 默认使用 `--browser-mode headless`，不会在模糊搜索阶段打开有头浏览器；`visible` 打开可见窗口；`minimized` 通过浏览器启动参数保持窗口最小化。首次登录和验证码处理必须使用 `visible` 或 `minimized`，headless 只复用已经保存的登录会话。
+- 除 `login` 外所有 CLI 命令默认使用 `--browser-mode headless`，不会在登录态检查、模糊搜索或价格采集阶段打开有头浏览器；`login` 默认使用 `visible`；`visible` 打开可见窗口；`minimized` 通过浏览器启动参数保持窗口最小化。无头模式发现未登录时，脚本自动切换到可见窗口等待人工登录，完成后恢复无头模式。
 - 页面导航后的登录信号允许携程完成短暂渲染切换：统一 `require_logged_in` 会持续探测，清晰的登录或登出信号稳定后才放行或失败，默认探测窗口为 15 秒。
 - 登录校验只读取本次操作重新打开并聚焦的当前 Page；成功条件是当前页“我的订单”可见且“登录”不可见。Profile 中旧 Tab 的标识不会替当前页面放行，Cookie 数量只作为诊断信息。
 - 选定酒店详情页后，脚本会关闭同一会话中的其他 Tab；命令结束时关闭整个浏览器上下文。`keep_browser_open: true` 或 `login --keep-open` 是保留窗口的显式例外；无交互终端收到 EOF 时按正常关闭处理，已保存的会话不受影响。

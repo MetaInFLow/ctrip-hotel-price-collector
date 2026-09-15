@@ -57,7 +57,7 @@ class CtripBrowserSession:
         *,
         page_index: int = 0,
         url_contains: str = "",
-        browser_mode: str = "visible",
+        browser_mode: str = "headless",
         launcher: Callable[..., Any] | None = None,
     ) -> None:
         default_path = default_session_root() / DEFAULT_PROFILE_NAME
@@ -120,6 +120,15 @@ class CtripBrowserSession:
             raise RuntimeError("浏览器已启动但没有可用页面")
         self.page = focus_page(selected)
         return self.page
+
+    def restart(self, browser_mode: str) -> "CtripBrowserSession":
+        if browser_mode not in BROWSER_MODES:
+            raise ValueError(
+                "browser_mode 必须是 visible、minimized 或 headless 之一"
+            )
+        self.close()
+        self.browser_mode = browser_mode
+        return self.open()
 
     def goto(self, url: str, *, wait_until: str = "domcontentloaded", timeout: int = 60_000) -> Any:
         page = self.focus()

@@ -15,6 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from ctrip_cli_auth import ensure_login, login_status  # noqa: E402
+from ctrip_login_guard import LoginRequiredError, require_logged_in  # noqa: E402
 from ctrip_cli_browser import (  # noqa: E402
     CtripBrowserSession,
     HOME_URL,
@@ -185,9 +186,39 @@ def effective_browser_mode(args: argparse.Namespace) -> str:
     explicit_mode = getattr(args, "browser_mode", None)
     if explicit_mode:
         return explicit_mode
+    if getattr(args, "command", "") in {"", "login"}:
+        return "visible"
     if getattr(args, "command", "") == "collect":
         return "visible" if getattr(args, "login_only", False) else "headless"
-    return "visible"
+    return "headless"
+
+
+def ensure_cli_login(
+    session: CtripBrowserSession,
+    args: argparse.Namespace,
+) -> Any:
+    """Use headless verification by default and show a window only for login."""
+
+    mode = effective_browser_mode(args)
+    page = session.goto(HOME_URL)
+    if mode != "headless":
+        return ensure_login(session.browser, page)
+    try:
+        return require_logged_in(
+            session.browser,
+            page,
+            operation="无头模式下的携程操作",
+        )
+    except LoginRequiredError:
+        print("当前会话需要登录，正在切换到可见窗口；登录完成后恢复无头模式。", flush=True)
+        session.restart("visible")
+        ensure_login(session.browser, session.goto(HOME_URL))
+        session.restart("headless")
+        return require_logged_in(
+            session.browser,
+            session.goto(HOME_URL),
+            operation="切回无头模式后的携程操作",
+        )
 
 
 def _json_print(value: Any) -> None:
@@ -257,7 +288,7 @@ def run_search(args: argparse.Namespace) -> int:
         url_contains=args.page_url_contains,
         browser_mode=effective_browser_mode(args),
     ) as session:
-        page = ensure_login(session.browser, session.focus())
+        page = ensure_cli_login(session, args)
         if args.list_only:
             _, candidates = search_candidates(
                 session.browser,
@@ -314,7 +345,7 @@ def run_price(args: argparse.Namespace) -> int:
         url_contains=args.page_url_contains,
         browser_mode=effective_browser_mode(args),
     ) as session:
-        page = ensure_login(session.browser, session.focus())
+        page = ensure_cli_login(session, args)
         detail_url = args.detail_url
         hotel_name = args.hotel or "hotel"
         if detail_url:

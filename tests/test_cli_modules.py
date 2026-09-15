@@ -157,6 +157,28 @@ class CliModuleTests(unittest.TestCase):
         self.assertEqual(cli_module.effective_browser_mode(default_args), "headless")
         self.assertEqual(cli_module.effective_browser_mode(visible_args), "visible")
 
+        command_arguments = {
+            "login-status": ["login-status"],
+            "search": ["search", "--keyword", "酒店"],
+            "price": [
+                "price",
+                "--detail-url",
+                "https://hotels.ctrip.com/hotels/1.html",
+                "--start-date",
+                "2026-09-10",
+            ],
+        }
+        for argv in command_arguments.values():
+            command_args = parser.parse_args(argv)
+            self.assertEqual(
+                cli_module.effective_browser_mode(command_args),
+                "headless",
+            )
+        self.assertEqual(
+            cli_module.effective_browser_mode(parser.parse_args(["login"])),
+            "visible",
+        )
+
     def test_collect_command_has_no_parallel_instance_override(self):
         cli_module = load_module("ctrip_cli_sequential_mode", "ctrip_cli.py")
         parser = cli_module.build_parser()

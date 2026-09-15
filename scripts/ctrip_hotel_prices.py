@@ -1654,6 +1654,8 @@ def collect_prices(
         try:
             return require_logged_in(browser, current_page, operation="酒店价格采集")
         except LoginRequiredError:
+            if browser_mode == "headless":
+                return login_visibly_then_resume_headless()
             print("检测到登录状态失效，正在重新打开登录流程。", flush=True)
             refreshed_page = wait_for_login(
                 browser,
@@ -1667,41 +1669,103 @@ def collect_prices(
                 operation="重新登录后的酒店价格采集",
             )
 
+    def launch_browser(mode: str) -> Any:
+        launch_kwargs: dict[str, Any] = {"headless": mode == "headless"}
+        if mode == "minimized":
+            launch_kwargs["args"] = ["--start-minimized"]
+        return launch_persistent_context(str(profile_dir), **launch_kwargs)
+
+    def current_page(current_browser: Any) -> Any:
+        page = current_browser.pages[0] if current_browser.pages else current_browser.new_page()
+        page = focus_page(page)
+        page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
+        return page
+
+    def close_current_browser() -> None:
+        nonlocal browser
+        if browser is not None:
+            close_browser_safely(browser)
+            browser = None
+
+    def login_visibly_then_resume_headless() -> Any:
+        """Show a window only for manual login, then resume in headless mode."""
+
+        nonlocal browser
+        close_current_browser()
+        print("需要登录，正在打开可见窗口；登录完成后自动切回无头模式。", flush=True)
+        browser = launch_browser("visible")
+        visible_page = current_page(browser)
+        visible_page = wait_for_login(
+            browser,
+            visible_page,
+            float(config["login_timeout_seconds"]),
+            session_probe_seconds=float(config["session_probe_seconds"]),
+            has_persisted_cookies=count_ctrip_cookies(browser) > 0,
+        )
+        visible_page = require_logged_in(
+            browser,
+            visible_page,
+            operation="可见窗口登录后的酒店价格采集",
+        )
+        close_current_browser()
+        browser = launch_browser("headless")
+        resumed_page = current_page(browser)
+        return require_logged_in(
+            browser,
+            resumed_page,
+            operation="切回无头模式后的酒店价格采集",
+        )
+
     try:
         print("正在启动带本地会话的 CloakBrowser...", flush=True)
         if profile_exists:
             print(f"发现本地会话目录，先校验登录状态：{profile_dir}", flush=True)
         else:
             print(f"未发现本地会话目录，将在首次登录后保存：{profile_dir}", flush=True)
-        if browser_mode == "headless" and not profile_exists:
+        initial_mode = browser_mode
+        if login_only and browser_mode == "headless":
             raise RuntimeError(
-                "headless 模式要求先有可复用的本地登录会话；"
-                "首次登录请使用 --browser-mode visible 或 minimized。"
+                "login-only 必须使用 visible 或 minimized 模式，才能完成手动登录。"
             )
-        launch_kwargs: dict[str, Any] = {
-            "headless": browser_mode == "headless",
-        }
-        if browser_mode == "minimized":
-            launch_kwargs["args"] = ["--start-minimized"]
-        browser = launch_persistent_context(str(profile_dir), **launch_kwargs)
+        if browser_mode == "headless" and not profile_exists:
+            initial_mode = "visible"
+        browser = launch_browser(initial_mode)
         cookie_count = count_ctrip_cookies(browser)
         if cookie_count:
             print(f"已加载本地携程 Cookie（{cookie_count} 个），正在验证登录状态。", flush=True)
         else:
             print("本地未加载到携程 Cookie，等待手动登录。", flush=True)
-        if browser_mode == "headless" and cookie_count == 0:
-            raise RuntimeError(
-                "headless 模式没有检测到携程 Cookie；请先用 visible 或 minimized 模式完成登录。"
+        if browser_mode == "headless" and initial_mode == "visible":
+            page = wait_for_login(
+                browser,
+                current_page(browser),
+                float(config["login_timeout_seconds"]),
+                session_probe_seconds=float(config["session_probe_seconds"]),
+                has_persisted_cookies=cookie_count > 0,
             )
-        page = browser.pages[0] if browser.pages else browser.new_page()
-        page = focus_page(page)
-        page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
-        if browser_mode == "headless":
-            page = require_logged_in(browser, page, operation="headless 酒店价格采集")
+            page = require_logged_in(browser, page, operation="可见窗口登录后的酒店价格采集")
+            close_current_browser()
+            browser = launch_browser("headless")
+            page = require_logged_in(
+                browser,
+                current_page(browser),
+                operation="切回无头模式后的酒店价格采集",
+            )
+        elif browser_mode == "headless" and cookie_count == 0:
+            page = login_visibly_then_resume_headless()
+        elif browser_mode == "headless":
+            try:
+                page = require_logged_in(
+                    browser,
+                    current_page(browser),
+                    operation="headless 酒店价格采集",
+                )
+            except LoginRequiredError:
+                page = login_visibly_then_resume_headless()
         else:
             page = wait_for_login(
                 browser,
-                page,
+                current_page(browser),
                 float(config["login_timeout_seconds"]),
                 session_probe_seconds=float(config["session_probe_seconds"]),
                 has_persisted_cookies=cookie_count > 0,
